@@ -33,8 +33,10 @@
     background: #000; color: #33ff33; border: 1px solid #33ff33;
     font: inherit; padding: 10px 14px; margin-top: 12px; width: 100%;
   }
-  #map { text-align: center; padding: 40px 0; color: #00aa44; }
 </style>
+<link rel="stylesheet" href="vendor/leaflet.css">
+<script src="vendor/leaflet.js"></script>
+<script src="vendor/protomaps-leaflet.js"></script>
 </head>
 <body>
 
@@ -57,7 +59,7 @@
 </div>
 
 <div id="map" class="view">
-  <div id="map">[ MAP MODULE OFFLINE ]</div>
+  <div id="mapdiv" style="height:70vh;background:#000"></div>
 </div>
 
 <script>
@@ -102,12 +104,29 @@ function addIntel() {
   save(); renderIntel();
 }
 
+var mapStarted = false;
+function initMap() {
+  if (mapStarted) return;
+  mapStarted = true;
+  var map = L.map('mapdiv').setView([45.5231, -122.6765], 14);
+  protomapsL.leafletLayer({ url: 'portland.pmtiles', theme: 'black' }).addTo(map);
+  setTimeout(function () { map.invalidateSize(); }, 100);
+  var me = null;
+  navigator.geolocation.watchPosition(function (p) {
+    var ll = [p.coords.latitude, p.coords.longitude];
+    if (!me) {
+      me = L.circleMarker(ll, { radius: 7, color: '#33ff33', fillColor: '#33ff33', fillOpacity: 0.9 }).addTo(map);
+    } else { me.setLatLng(ll); }
+  }, function (e) {}, { enableHighAccuracy: true });
+}
+
 document.querySelectorAll('#tabs div').forEach(function (tab) {
   tab.onclick = function () {
     document.querySelectorAll('#tabs div').forEach(function (t) { t.classList.remove('on'); });
     document.querySelectorAll('.view').forEach(function (v) { v.classList.remove('on'); });
     tab.classList.add('on');
     document.getElementById(tab.dataset.v).classList.add('on');
+    if (tab.dataset.v === 'map') initMap();
   };
 });
 
