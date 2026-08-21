@@ -33,6 +33,7 @@
     background: #000; color: #33ff33; border: 1px solid #33ff33;
     font: inherit; padding: 10px 14px; margin-top: 12px; width: 100%;
   }
+  #mapdiv canvas { filter: brightness(2.2) sepia(1) hue-rotate(65deg) saturate(2.5); }
 </style>
 <link rel="stylesheet" href="vendor/leaflet.css">
 <script src="vendor/leaflet.js"></script>
@@ -42,100 +43,4 @@
 
 <div id="hdr">
   <span>OPSAT</span>
-  <span id="clock" class="dim"></span>
-</div>
-
-<div id="tabs">
-  <div data-v="obj" class="on">OBJ</div>
-  <div data-v="intel">INTEL</div>
-  <div data-v="map">MAP</div>
-</div>
-
-<div id="obj" class="view on"></div>
-
-<div id="intel" class="view">
-  <div id="intelList"></div>
-  <button onclick="addIntel()">+ LOG INTEL</button>
-</div>
-
-<div id="map" class="view">
-  <div id="mapdiv" style="height:70vh;background:#000"></div>
-</div>
-
-<script>
-var state = JSON.parse(localStorage.getItem('opsat') || 'null') || {
-  objectives: [
-    { t: 'Establish OPSAT uplink', p: 'PRIMARY', done: true },
-    { t: 'Verify hardware bridge', p: 'PRIMARY', done: false },
-    { t: 'Mount unit on wrist', p: 'SECONDARY', done: false }
-  ],
-  intel: []
-};
-
-function save() { localStorage.setItem('opsat', JSON.stringify(state)); }
-
-function renderObj() {
-  var el = document.getElementById('obj');
-  el.innerHTML = '';
-  state.objectives.forEach(function (o, i) {
-    var d = document.createElement('div');
-    d.className = 'obj' + (o.done ? ' done' : '');
-    d.innerHTML = '<span class="tag dim">[' + o.p + ']</span> ' + o.t;
-    d.onclick = function () { o.done = !o.done; save(); renderObj(); };
-    el.appendChild(d);
-  });
-}
-
-function renderIntel() {
-  var el = document.getElementById('intelList');
-  el.innerHTML = '';
-  state.intel.slice().reverse().forEach(function (n) {
-    var d = document.createElement('div');
-    d.className = 'intel';
-    d.innerHTML = '<div class="ts">' + n.ts + '</div>' + n.txt;
-    el.appendChild(d);
-  });
-}
-
-function addIntel() {
-  var txt = prompt('INTEL:');
-  if (!txt) return;
-  state.intel.push({ txt: txt, ts: new Date().toLocaleString() });
-  save(); renderIntel();
-}
-
-var mapStarted = false;
-function initMap() {
-  if (mapStarted) return;
-  mapStarted = true;
-  var map = L.map('mapdiv').setView([45.5231, -122.6765], 14);
-  protomapsL.leafletLayer({ url: 'portland.pmtiles', theme: 'black' }).addTo(map);
-  setTimeout(function () { map.invalidateSize(); }, 100);
-  var me = null;
-  navigator.geolocation.watchPosition(function (p) {
-    var ll = [p.coords.latitude, p.coords.longitude];
-    if (!me) {
-      me = L.circleMarker(ll, { radius: 7, color: '#33ff33', fillColor: '#33ff33', fillOpacity: 0.9 }).addTo(map);
-    } else { me.setLatLng(ll); }
-  }, function (e) {}, { enableHighAccuracy: true });
-}
-
-document.querySelectorAll('#tabs div').forEach(function (tab) {
-  tab.onclick = function () {
-    document.querySelectorAll('#tabs div').forEach(function (t) { t.classList.remove('on'); });
-    document.querySelectorAll('.view').forEach(function (v) { v.classList.remove('on'); });
-    tab.classList.add('on');
-    document.getElementById(tab.dataset.v).classList.add('on');
-    if (tab.dataset.v === 'map') initMap();
-  };
-});
-
-setInterval(function () {
-  document.getElementById('clock').textContent =
-    new Date().toTimeString().slice(0, 8);
-}, 1000);
-
-renderObj(); renderIntel();
-</script>
-</body>
-</html>
+  
