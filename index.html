@@ -1,9 +1,11 @@
-cat > ~/opsat/index.html << 'HTMLEOF'
 <!doctype html>
 <html>
 <head>
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>OPSAT</title>
+<link rel="manifest" href="manifest.json">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="theme-color" content="#000000">
 <style>
   * { box-sizing: border-box; margin: 0; }
   body {
@@ -29,6 +31,7 @@ cat > ~/opsat/index.html << 'HTMLEOF'
   .obj { padding: 12px 6px; border-bottom: 1px solid #003311; }
   .obj.done { color: #00aa44; text-decoration: line-through; }
   .obj .tag { font-size: 13px; }
+  .obj .wp { font-size: 13px; color: #00aa44; }
   .intel { padding: 10px 6px; border-bottom: 1px solid #003311; }
   .intel .ts { font-size: 13px; color: #00aa44; }
   button {
@@ -36,6 +39,13 @@ cat > ~/opsat/index.html << 'HTMLEOF'
     font: inherit; padding: 10px 14px; margin-top: 12px; width: 100%;
   }
   #mapdiv canvas { filter: brightness(2.2) sepia(1) hue-rotate(65deg) saturate(2.5); }
+  .leaflet-popup-content-wrapper, .leaflet-popup-tip {
+    background: #000; color: #33ff33;
+    border: 1px solid #33ff33; border-radius: 0;
+    font-family: ui-monospace, Menlo, Consolas, monospace;
+  }
+  .leaflet-popup-content { margin: 10px 12px; font-size: 14px; }
+  .wp-dist { color: #00aa44; font-size: 12px; }
 </style>
 <link rel="stylesheet" href="vendor/leaflet.css">
 <script src="vendor/leaflet.js"></script>
@@ -76,7 +86,18 @@ var state = JSON.parse(localStorage.getItem('opsat') || 'null') || {
   intel: []
 };
 
+// migration: existing saved states have no waypoints yet.
+// seed one sample so the feature is visible; delete or edit freely.
+if (!state.objectives.some(function (o) { return o.ll; })) {
+  state.objectives.push({
+    t: 'Rally point: Pioneer Courthouse Sq',
+    p: 'SECONDARY', done: false,
+    ll: [45.5191, -122.6794]
+  });
+}
+
 function save() { localStorage.setItem('opsat', JSON.stringify(state)); }
+save();
 
 function renderObj() {
   var el = document.getElementById('obj');
@@ -84,8 +105,9 @@ function renderObj() {
   state.objectives.forEach(function (o, i) {
     var d = document.createElement('div');
     d.className = 'obj' + (o.done ? ' done' : '');
-    d.innerHTML = '<span class="tag dim">[' + o.p + ']</span> ' + o.t;
-    d.onclick = function () { o.done = !o.done; save(); renderObj(); };
+    d.innerHTML = '<span class="tag dim">[' + o.p + ']</span> ' + o.t +
+      (o.ll ? ' <span class="wp">&#9670;</span>' : '');
+    d.onclick = function () { o.done = !o.done; save(); renderObj(); syncMarkers(); };
     el.appendChild(d);
   });
 }
@@ -114,23 +136,70 @@ function setGps(msg) {
   gpsEl.textContent = 'GPS: ' + msg;
 }
 
+// distance between two [lat,lng] in meters (haversine)
+function distM(a, b) {
+  var R = 6371000, rad = Math.PI / 180;
+  var dLat = (b[0] - a[0]) * rad, dLng = (b[1] - a[1]) * rad;
+  var s = Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+    Math.cos(a[0] * rad) * Math.cos(b[0] * rad) *
+    Math.sin(dLng / 2) * Math.sin(dLng / 2);
+  return Math.round(R * 2 * Math.atan2(Math.sqrt(s), Math.sqrt(1 - s)));
+}
+
+function fmtDist(m) {
+  return m >= 1000 ? (m / 1000).toFixed(1) + ' km' : m + ' m';
+}
+
+var map = null, myPos = null, wpMarkers = [];
+
+function popupHtml(o) {
+  var h = '<span class="tag dim">[' + o.p + ']</span> ' + o.t;
+  if (myPos && o.ll) h += '<br><span class="wp-dist">DIST: ' + fmtDist(distM(myPos, o.ll)) + '</span>';
+  return h;
+}
+
+function syncMarkers() {
+  if (!map) return;
+  wpMarkers.forEach(function (m) { map.removeLayer(m); });
+  wpMarkers = [];
+  state.objectives.forEach(function (o) {
+    if (!o.ll) return;
+    var mk = L.circleMarker(o.ll, {
+      radius: 9,
+      color: o.done ? '#00aa44' : '#33ff33',
+      fillColor: '#000',
+      fillOpacity: 0.7,
+      weight: 2
+    }).addTo(map);
+    mk.bindPopup(popupHtml(o));
+    mk._obj = o;
+    wpMarkers.push(mk);
+  });
+}
+
+function refreshPopups() {
+  wpMarkers.forEach(function (mk) { mk.setPopupContent(popupHtml(mk._obj)); });
+}
+
 var mapStarted = false;
 function initMap() {
   if (mapStarted) return;
   mapStarted = true;
-  var map = L.map('mapdiv').setView([45.5231, -122.6765], 14);
+  map = L.map('mapdiv').setView([45.5231, -122.6765], 14);
   protomapsL.leafletLayer({ url: 'portland.pmtiles', theme: 'dark' }).addTo(map);
   setTimeout(function () { map.invalidateSize(); }, 100);
+  syncMarkers();
   if (!navigator.geolocation) { setGps('UNSUPPORTED'); return; }
   setGps('ACQUIRING\u2026');
   var me = null;
   navigator.geolocation.watchPosition(function (p) {
-    var ll = [p.coords.latitude, p.coords.longitude];
+    myPos = [p.coords.latitude, p.coords.longitude];
     setGps('LOCKED \u00b1' + Math.round(p.coords.accuracy) + 'm');
     if (!me) {
-      me = L.circleMarker(ll, { radius: 7, color: '#33ff33', fillColor: '#33ff33', fillOpacity: 0.9 }).addTo(map);
-      map.setView(ll, 15);
-    } else { me.setLatLng(ll); }
+      me = L.circleMarker(myPos, { radius: 7, color: '#33ff33', fillColor: '#33ff33', fillOpacity: 0.9 }).addTo(map);
+      map.setView(myPos, 15);
+    } else { me.setLatLng(myPos); }
+    refreshPopups();
   }, function (e) {
     var names = { 1: 'DENIED', 2: 'UNAVAILABLE', 3: 'TIMEOUT' };
     setGps('ERR ' + e.code + ' ' + (names[e.code] || '') + ' \u2014 ' + e.message);
@@ -156,4 +225,3 @@ renderObj(); renderIntel();
 </script>
 </body>
 </html>
-HTMLEOF

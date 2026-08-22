@@ -1,0 +1,9 @@
+{
+  "name": "OPSAT",
+  "short_name": "OPSAT",
+  "start_url": "http://localhost:8080/",
+  "display": "fullscreen",
+  "orientation": "landscape",
+  "background_color": "#000000",
+  "theme_color": "#000000"
+}
