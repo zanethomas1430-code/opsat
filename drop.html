@@ -1,0 +1,92 @@
+<!doctype html>
+<html>
+<head>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>OPSAT DROP</title>
+<style>
+  * { box-sizing: border-box; margin: 0; }
+  body {
+    background: #000; color: #33ff33;
+    font-family: ui-monospace, Menlo, Consolas, monospace;
+    font-size: 16px; letter-spacing: 0.5px;
+    padding: 10px;
+  }
+  .dim { color: #00aa44; }
+  #hdr {
+    display: flex; justify-content: space-between;
+    border-bottom: 1px solid #00aa44; padding-bottom: 6px;
+    margin-bottom: 10px;
+  }
+  #status { font-size: 13px; color: #00aa44; min-height: 18px; margin: 8px 0; }
+  textarea {
+    width: 100%; height: 55vh;
+    background: #000; color: #33ff33;
+    border: 1px solid #00aa44;
+    font: inherit; padding: 10px;
+    resize: vertical;
+  }
+  textarea:focus { outline: none; border-color: #33ff33; }
+  .row { display: flex; gap: 10px; }
+  button {
+    background: #000; color: #33ff33; border: 1px solid #33ff33;
+    font: inherit; padding: 12px 0; margin-top: 10px; flex: 1;
+  }
+  button:active { background: #33ff33; color: #000; }
+</style>
+</head>
+<body>
+
+<div id="hdr">
+  <span>OPSAT DROP</span>
+  <span class="dim">DEAD LETTER BOX</span>
+</div>
+
+<textarea id="box" spellcheck="false" placeholder="Paste payload here, then SEND. On the other device: LOAD, then COPY."></textarea>
+<div id="status">STANDBY</div>
+<div class="row">
+  <button onclick="send()">SEND</button>
+  <button onclick="load()">LOAD</button>
+  <button onclick="copyOut()">COPY</button>
+</div>
+
+<script>
+var box = document.getElementById('box');
+var stat = document.getElementById('status');
+
+function say(msg) { stat.textContent = msg; }
+
+function send() {
+  fetch('/drop', { method: 'POST', body: box.value })
+    .then(function (r) {
+      if (r.ok) say('SENT ' + box.value.length + ' CHARS \u2014 ' + new Date().toTimeString().slice(0, 8));
+      else say('SEND FAILED: HTTP ' + r.status);
+    })
+    .catch(function (e) { say('SEND FAILED: ' + e.message); });
+}
+
+function load() {
+  fetch('/drop', { cache: 'no-store' })
+    .then(function (r) { return r.text(); })
+    .then(function (t) {
+      box.value = t;
+      say(t.length ? 'LOADED ' + t.length + ' CHARS' : 'DROP EMPTY');
+    })
+    .catch(function (e) { say('LOAD FAILED: ' + e.message); });
+}
+
+function copyOut() {
+  box.select();
+  box.setSelectionRange(0, box.value.length);
+  var ok = false;
+  try { ok = document.execCommand('copy'); } catch (e) {}
+  if (navigator.clipboard && window.isSecureContext) {
+    navigator.clipboard.writeText(box.value)
+      .then(function () { say('COPIED ' + box.value.length + ' CHARS'); })
+      .catch(function () { say(ok ? 'COPIED ' + box.value.length + ' CHARS' : 'COPY BLOCKED \u2014 long-press the text and copy manually'); });
+  } else {
+    say(ok ? 'COPIED ' + box.value.length + ' CHARS' : 'COPY BLOCKED \u2014 long-press the text and copy manually');
+  }
+}
+</script>
+</body>
+</html>
