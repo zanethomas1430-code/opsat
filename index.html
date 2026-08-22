@@ -1,3 +1,4 @@
+cat > ~/opsat/index.html << 'HTMLEOF'
 <!doctype html>
 <html>
 <head>
@@ -16,6 +17,7 @@
     display: flex; justify-content: space-between;
     border-bottom: 1px solid #00aa44; padding-bottom: 6px;
   }
+  #gps { font-size: 13px; color: #00aa44; padding: 4px 0; }
   #tabs { display: flex; margin: 10px 0; }
   #tabs div {
     flex: 1; text-align: center; padding: 10px 0;
@@ -45,6 +47,7 @@
   <span>OPSAT</span>
   <span id="clock" class="dim"></span>
 </div>
+<div id="gps">GPS: STANDBY</div>
 
 <div id="tabs">
   <div data-v="obj" class="on">OBJ</div>
@@ -63,7 +66,7 @@
   <div id="mapdiv" style="height:70vh;background:#000"></div>
 </div>
 
- <script>
+<script>
 var state = JSON.parse(localStorage.getItem('opsat') || 'null') || {
   objectives: [
     { t: 'Establish OPSAT uplink', p: 'PRIMARY', done: true },
@@ -104,6 +107,13 @@ function addIntel() {
   state.intel.push({ txt: txt, ts: new Date().toLocaleString() });
   save(); renderIntel();
 }
+
+var gpsEl = null;
+function setGps(msg) {
+  if (!gpsEl) gpsEl = document.getElementById('gps');
+  gpsEl.textContent = 'GPS: ' + msg;
+}
+
 var mapStarted = false;
 function initMap() {
   if (mapStarted) return;
@@ -111,13 +121,20 @@ function initMap() {
   var map = L.map('mapdiv').setView([45.5231, -122.6765], 14);
   protomapsL.leafletLayer({ url: 'portland.pmtiles', theme: 'dark' }).addTo(map);
   setTimeout(function () { map.invalidateSize(); }, 100);
+  if (!navigator.geolocation) { setGps('UNSUPPORTED'); return; }
+  setGps('ACQUIRING\u2026');
   var me = null;
   navigator.geolocation.watchPosition(function (p) {
     var ll = [p.coords.latitude, p.coords.longitude];
+    setGps('LOCKED \u00b1' + Math.round(p.coords.accuracy) + 'm');
     if (!me) {
       me = L.circleMarker(ll, { radius: 7, color: '#33ff33', fillColor: '#33ff33', fillOpacity: 0.9 }).addTo(map);
+      map.setView(ll, 15);
     } else { me.setLatLng(ll); }
-  }, function (e) {}, { enableHighAccuracy: true });
+  }, function (e) {
+    var names = { 1: 'DENIED', 2: 'UNAVAILABLE', 3: 'TIMEOUT' };
+    setGps('ERR ' + e.code + ' ' + (names[e.code] || '') + ' \u2014 ' + e.message);
+  }, { enableHighAccuracy: true, timeout: 30000, maximumAge: 5000 });
 }
 
 document.querySelectorAll('#tabs div').forEach(function (tab) {
@@ -139,3 +156,4 @@ renderObj(); renderIntel();
 </script>
 </body>
 </html>
+HTMLEOF
