@@ -145,6 +145,8 @@
         <div class="action-btn" data-action="mark"><span class="action-label">MARK</span><span class="action-sub">log intel</span></div>
         <div class="action-btn" data-action="scan"><span class="action-label">SCAN</span><span class="action-sub">wifi + ble</span></div>
         <div class="action-btn" data-action="recon"><span class="action-label">RECON</span><span class="action-sub">own LAN</span></div>
+        <div class="action-btn" data-action="nfcread"><span class="action-label">TAG</span><span class="action-sub">read own</span></div>
+        <div class="action-btn" data-action="nfcwrite"><span class="action-label">WRITE</span><span class="action-sub">own sticker</span></div>
       </div>
       <div id="events">
         <div id="events-log"></div>
@@ -353,6 +355,51 @@ function netscan() {
   }).catch(function (e) { el.innerHTML = ''; el.appendChild(errLine('RECON FAILED: ' + e.message)); logEvent('RECON', 'failed', 'alert'); });
 }
 
+
+// ---------- nfc (own tags only) ----------
+function showSense(msg) {
+  document.querySelectorAll('#tabs .tab').forEach(function (t) { t.classList.remove('active'); });
+  var st = document.querySelector('#tabs .tab[data-v=\'sense\']'); if (st) st.classList.add('active');
+  Object.keys(panes).forEach(function (k) { document.getElementById(panes[k]).classList.remove('on'); });
+  document.getElementById('pane-map-hud').classList.remove('on');
+  document.getElementById('pane-sense').classList.add('on');
+  var el = document.getElementById('senseList'); el.innerHTML = '<div class="err">' + msg + '</div>';
+  return el;
+}
+
+function nfcRead() {
+  var el = showSense('HOLD TAG TO PHONE\u2026 (own tags only)');
+  logEvent('TAG', 'read armed \u2014 waiting for tap');
+  fetch('/nfc', { cache: 'no-store' }).then(function (r) { return r.json(); }).then(function (d) {
+    el.innerHTML = '';
+    if (d.error) { el.appendChild(errLine('TAG ERR: ' + d.error)); logEvent('TAG', 'err: ' + d.error, 'alert'); return; }
+    var t = d.tag || {};
+    var s = document.createElement('div'); s.className = 'sect'; s.textContent = 'TAG READ'; el.appendChild(s);
+    el.appendChild(row('UID', t.id || '<none>', null));
+    el.appendChild(row('TYPE', (t.type != null ? JSON.stringify(t.type) : '<unknown>'), null));
+    // log the sighting into intel as an inventory entry
+    var uid = t.id || 'unknown';
+    state.intel.push({ txt: 'TAG UID ' + uid, ts: new Date().toLocaleString() });
+    save(); renderIntel();
+    logEvent('TAG', 'UID ' + uid, 'system');
+    buzz();
+  }).catch(function (e) { el.innerHTML = ''; el.appendChild(errLine('TAG FAILED: ' + e.message)); });
+}
+
+function nfcWrite() {
+  var text = prompt('WRITE TO OWN STICKER \u2014 url or text:', 'http://localhost:8080/#ds=alpha');
+  if (!text) return;
+  var el = showSense('HOLD WRITABLE STICKER TO PHONE\u2026');
+  logEvent('WRITE', 'armed: ' + text);
+  fetch('/nfcwrite', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ text: text }) })
+    .then(function (r) { return r.json(); }).then(function (d) {
+      el.innerHTML = '';
+      var s = document.createElement('div'); s.className = 'sect'; s.textContent = 'TAG WRITE'; el.appendChild(s);
+      if (d.ok) { el.appendChild(row('OK', 'wrote: ' + d.wrote, null)); logEvent('WRITE', 'ok', 'system'); buzz(); }
+      else { el.appendChild(errLine('WRITE ERR: ' + d.error)); logEvent('WRITE', 'err: ' + d.error, 'alert'); }
+    }).catch(function (e) { el.innerHTML = ''; el.appendChild(errLine('WRITE FAILED: ' + e.message)); });
+}
+
 // ---------- tabs ----------
 var panes = { obj: 'pane-obj', intel: 'pane-intel', sense: 'pane-sense' };
 document.querySelectorAll('#tabs .tab').forEach(function (tab) {
@@ -375,6 +422,8 @@ document.querySelectorAll('.action-btn').forEach(function (b) {
     if (a === 'mark') addIntel();
     else if (a === 'scan') scan();
     else if (a === 'recon') netscan();
+    else if (a === 'nfcread') nfcRead();
+    else if (a === 'nfcwrite') nfcWrite();
   };
 });
 

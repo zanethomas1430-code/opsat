@@ -104,6 +104,46 @@ def netscan():
     return {'subnet': str(net), 'self': ip, 'count': len(hosts), 'hosts': hosts}
 
 
+
+def nfc_read():
+    """Read one tag now (blocking until a tag is present or timeout).
+    termux-nfc returns JSON describing the tapped tag. Own tags only:
+    this reports UID/type, it does not authenticate or crack sectors."""
+    ok, out = run(['termux-nfc', '-r', 'short'], timeout=25)
+    if not ok:
+        return {'error': out}
+    try:
+        data = json.loads(out)
+    except ValueError:
+        return {'error': 'unparseable', 'raw': out[:400]}
+    # normalize the fields we care about
+    tag = {}
+    # termux-nfc shapes vary by version; pull common keys defensively
+    def dig(d, *keys):
+        for k in keys:
+            if isinstance(d, dict) and k in d:
+                return d[k]
+        return None
+    tag['id'] = dig(data, 'id', 'uid', 'serial')
+    tag['type'] = dig(data, 'type', 'techlist', 'tech')
+    tag['raw'] = data
+    return {'tag': tag}
+
+
+def nfc_write(text):
+    """Write a text/URL record to a writable tag you own (NTAG etc.).
+    Refuses empty payloads. Does not format or lock."""
+    text = (text or '').strip()
+    if not text:
+        return {'ok': False, 'error': 'empty payload'}
+    # -w write mode, -t link/text record
+    ok, out = run(['termux-nfc', '-w', '-t', 'link', '-p', text], timeout=25)
+    if not ok:
+        # some builds use different flags; report so we can adapt
+        return {'ok': False, 'error': out}
+    return {'ok': True, 'wrote': text}
+
+
 class OpsatHandler(RangeRequestHandler):
 
     def _json(self, obj, code=200):
@@ -175,6 +215,11 @@ class OpsatHandler(RangeRequestHandler):
             self._json(netscan())
             return
 
+
+        if self.path == '/nfc':
+            self._json(nfc_read())
+            return
+
         super().do_GET()
 
     def do_POST(self):
@@ -189,6 +234,16 @@ class OpsatHandler(RangeRequestHandler):
             self.end_headers()
             self.wfile.write(b'OK')
             return
+        if self.path == '/nfcwrite':
+            length = int(self.headers.get('Content-Length', 0))
+            raw = self.rfile.read(length) if length else b''
+            try:
+                payload = json.loads(raw.decode('utf-8'))
+            except Exception:
+                payload = {}
+            self._json(nfc_write(payload.get('text', '')))
+            return
+
         self.send_response(404)
         self.end_headers()
 
