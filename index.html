@@ -1,24 +1,387 @@
-OPSAT
-00:00:00
-FIELD MODE: DUNGEON HUD
-BAT
---%
-GPS
-STBY
-OBJ
-INTEL
-MAP
-SENSE
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>OPSAT</title>
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
+<link rel="manifest" href="manifest.json">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="theme-color" content="#000000">
+<style>
+  :root {
+    --bg: #020403; --bg-panel: #040a08;
+    --accent: #00ff99; --accent-soft: #00aa66;
+    --danger: #ff3366; --text: #e0ffe8; --muted: #4caf7a; --grid: #062016;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; padding: 0;
+    background: radial-gradient(circle at top, #06140e 0, #020403 55%, #000000 100%);
+    color: var(--text); font-family: "Courier New", monospace; font-size: 12px;
+    overflow: hidden; user-select: none;
+  }
+  #root { display: flex; flex-direction: column; height: 100vh; width: 100vw; }
+
+  #status-bar {
+    flex: 0 0 32px; display: flex; align-items: center; justify-content: space-between;
+    padding: 4px 8px; border-bottom: 1px solid #0a2a1a;
+    background: linear-gradient(to right, #030a07, #071610); position: relative;
+  }
+  #status-left { display: flex; align-items: baseline; gap: 10px; font-weight: bold; letter-spacing: 0.12em; }
+  #status-left span.label { color: var(--accent-soft); }
+  #status-center { position: absolute; left: 50%; transform: translateX(-50%); font-size: 10px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.18em; }
+  #status-right { display: flex; gap: 10px; font-size: 10px; }
+  .status-pill { padding: 2px 6px; border-radius: 999px; border: 1px solid #084428; background: #02130b; display: flex; align-items: center; gap: 4px; }
+  .status-pill span.label { color: var(--muted); }
+  .status-pill span.value { color: var(--text); }
+  .status-pill.danger { border-color: var(--danger); color: var(--danger); }
+
+  #main {
+    flex: 1 1 auto; display: grid;
+    grid-template-columns: 0.62fr 0.38fr; grid-template-rows: auto 1fr;
+    grid-template-areas: "tabs panel" "map panel"; gap: 4px; padding: 4px;
+  }
+  #tabs { grid-area: tabs; display: flex; gap: 4px; padding-left: 2px; }
+  .tab { padding: 4px 10px; border-radius: 3px 3px 0 0; border: 1px solid #0a2a1a; border-bottom: none; background: #020806; color: var(--muted); text-transform: uppercase; font-size: 10px; letter-spacing: 0.12em; }
+  .tab.active { background: #04140c; color: var(--accent); }
+
+  #stage { grid-area: map; position: relative; border-radius: 2px; border: 1px solid #0a2a1a; overflow: hidden; background: radial-gradient(circle at center, #04180e 0, #010302 70%); }
+  #mapdiv { position: absolute; inset: 0; }
+  #mapdiv canvas { filter: brightness(2.2) sepia(1) hue-rotate(65deg) saturate(2.5); }
+
+  /* non-map panes live inside the stage, above the map, scrollable */
+  .pane { position: absolute; inset: 0; overflow-y: auto; padding: 6px 8px; background: #010302; display: none; }
+  .pane.on { display: block; }
+  #pane-map-hud { position: absolute; inset: 0; pointer-events: none; display: none; }
+  #pane-map-hud.on { display: block; }
+
+  #hud-grid { position: absolute; inset: 0; background-image: linear-gradient(to right, rgba(0,255,153,0.08) 1px, transparent 1px), linear-gradient(to bottom, rgba(0,255,153,0.08) 1px, transparent 1px); background-size: 24px 24px; mix-blend-mode: screen; opacity: 0.4; }
+  #hud-footer { position: absolute; bottom: 2px; left: 4px; right: 4px; font-size: 9px; display: flex; justify-content: space-between; color: var(--muted); text-transform: uppercase; }
+
+  .obj { padding: 8px 4px; border-bottom: 1px solid #0a2a1a; }
+  .obj.done { color: var(--accent-soft); text-decoration: line-through; }
+  .obj .tag { font-size: 10px; color: var(--muted); }
+  .obj .wp { color: var(--accent); }
+  .intel { padding: 7px 4px; border-bottom: 1px solid #0a2a1a; }
+  .intel .ts { font-size: 10px; color: var(--muted); }
+  .sect { font-size: 10px; color: var(--accent-soft); margin: 8px 2px 3px; border-bottom: 1px solid #0a2a1a; padding-bottom: 2px; text-transform: uppercase; letter-spacing: 0.1em; }
+  .node { padding: 6px 4px; border-bottom: 1px solid #0a2a1a; display: flex; gap: 8px; align-items: center; }
+  .node .nm { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .node .meta { font-size: 9px; color: var(--muted); }
+  .sig { display: inline-block; width: 40px; color: var(--accent); letter-spacing: 1px; }
+  .err { color: var(--muted); font-size: 10px; padding: 6px 4px; }
+
+  #panel { grid-area: panel; display: flex; flex-direction: column; border-radius: 2px; border: 1px solid #0a2a1a; background: #020705; }
+  #panel-header { flex: 0 0 auto; padding: 4px 6px; border-bottom: 1px solid #0a2a1a; display: flex; justify-content: space-between; align-items: center; }
+  #panel-header-title { font-size: 10px; text-transform: uppercase; letter-spacing: 0.15em; color: var(--accent); }
+  #panel-header-mode { font-size: 9px; color: var(--muted); }
+  #actions { flex: 0 0 auto; display: grid; grid-template-columns: repeat(3, 1fr); gap: 4px; padding: 4px; }
+  .action-btn { border-radius: 2px; border: 1px solid var(--accent-soft); background: #02150d; color: var(--accent); text-align: center; padding: 6px 2px 4px; text-transform: uppercase; font-size: 10px; letter-spacing: 0.16em; cursor: pointer; }
+  .action-btn:active { background: #04311e; box-shadow: 0 0 6px rgba(0,255,153,0.7); }
+  .action-label { display: block; }
+  .action-sub { display: block; font-size: 8px; color: var(--muted); letter-spacing: 0.08em; }
+  #events { flex: 1 1 auto; padding: 4px; display: flex; flex-direction: column; gap: 4px; overflow: hidden; }
+  #events-log { flex: 1 1 auto; border-radius: 2px; border: 1px solid #0a2a1a; background: #010504; padding: 4px; overflow-y: auto; font-size: 9px; }
+  .log-line { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .log-line span.time { color: var(--muted); margin-right: 4px; }
+  .log-line span.tag { color: var(--accent-soft); margin-right: 4px; }
+  .log-line.alert { color: var(--danger); }
+  .log-line.system { color: #7fd7a4; }
+  #events-footer { flex: 0 0 auto; display: flex; justify-content: space-between; font-size: 9px; color: var(--muted); padding: 2px 1px 3px; }
+  #events-log::-webkit-scrollbar { width: 4px; }
+  #events-log::-webkit-scrollbar-track { background: #020403; }
+  #events-log::-webkit-scrollbar-thumb { background: #0a2a1a; }
+
+  .leaflet-popup-content-wrapper, .leaflet-popup-tip { background: #000; color: var(--accent); border: 1px solid var(--accent); border-radius: 0; font-family: "Courier New", monospace; }
+  .leaflet-popup-content { margin: 8px 10px; font-size: 12px; }
+</style>
+<link rel="stylesheet" href="vendor/leaflet.css">
+<script src="vendor/leaflet.js"></script>
+<script src="vendor/protomaps-leaflet.js"></script>
+</head>
+<body>
+<div id="root">
+  <div id="status-bar">
+    <div id="status-left"><span class="label">OPSAT</span><span id="status-time">00:00:00</span></div>
+    <div id="status-center">FIELD MODE: DUNGEON HUD</div>
+    <div id="status-right">
+      <div class="status-pill"><span class="label">BAT</span><span class="value" id="status-battery">--%</span></div>
+      <div class="status-pill"><span class="label">GPS</span><span class="value" id="status-gps">STBY</span></div>
+    </div>
+  </div>
+
+  <div id="main">
+    <div id="tabs">
+      <div class="tab active" data-v="obj">OBJ</div>
+      <div class="tab" data-v="intel">INTEL</div>
+      <div class="tab" data-v="map">MAP</div>
+      <div class="tab" data-v="sense">SENSE</div>
+    </div>
+
+    <div id="stage">
+      <div id="mapdiv"></div>
+      <div id="pane-map-hud">
+        <div id="hud-grid"></div>
+        <div id="hud-footer">
+          <span id="hud-coords">COORD: --.------, --.------</span>
+          <span id="hud-mode">MODE: MAP</span>
+        </div>
+      </div>
+      <div id="pane-obj" class="pane on"></div>
+      <div id="pane-intel" class="pane">
+        <div id="intelList"></div>
+      </div>
+      <div id="pane-sense" class="pane">
+        <div id="senseList"><div class="err">Tap SCAN (in panel) to sweep.</div></div>
+      </div>
+    </div>
+
+    <div id="panel">
+      <div id="panel-header">
+        <div id="panel-header-title">FIELD LOG / ALERTS</div>
+        <div id="panel-header-mode">LOCAL ONLY</div>
+      </div>
+      <div id="actions">
+        <div class="action-btn" data-action="mark"><span class="action-label">MARK</span><span class="action-sub">log intel</span></div>
+        <div class="action-btn" data-action="scan"><span class="action-label">SCAN</span><span class="action-sub">wifi + ble</span></div>
+        <div class="action-btn" data-action="recon"><span class="action-label">RECON</span><span class="action-sub">own LAN</span></div>
+      </div>
+      <div id="events">
+        <div id="events-log"></div>
+        <div id="events-footer">
+          <span id="events-count">0 events</span>
+          <span id="events-last">last: none</span>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+// ---------- state ----------
+var state = JSON.parse(localStorage.getItem('opsat') || 'null') || {
+  objectives: [
+    { t: 'Establish OPSAT uplink', p: 'PRIMARY', done: true },
+    { t: 'Verify hardware bridge', p: 'PRIMARY', done: false },
+    { t: 'Mount unit on wrist', p: 'SECONDARY', done: false }
+  ],
+  intel: []
+};
+if (!state.objectives.some(function (o) { return o.ll; })) {
+  state.objectives.push({ t: 'Rally point: Pioneer Courthouse Sq', p: 'SECONDARY', done: false, ll: [45.5191, -122.6794] });
+}
+function save() { localStorage.setItem('opsat', JSON.stringify(state)); }
+save();
+
+function pad(n) { return String(n).padStart(2, '0'); }
+function hhmmss(d) { return pad(d.getHours()) + ':' + pad(d.getMinutes()) + ':' + pad(d.getSeconds()); }
+
+// ---------- clock ----------
+function updateClock() { document.getElementById('status-time').textContent = hhmmss(new Date()); }
+setInterval(updateClock, 1000); updateClock();
+
+// ---------- event log ----------
+var logEl = document.getElementById('events-log');
+var countEl = document.getElementById('events-count');
+var lastEl = document.getElementById('events-last');
+var logCount = 0;
+function logEvent(tag, text, kind) {
+  var line = document.createElement('div');
+  line.className = 'log-line' + (kind ? ' ' + kind : '');
+  line.innerHTML = '<span class="time">' + hhmmss(new Date()) + '</span><span class="tag">' + tag + '</span>' + text;
+  logEl.insertBefore(line, logEl.firstChild);
+  logCount++;
+  countEl.textContent = logCount + ' event' + (logCount === 1 ? '' : 's');
+  lastEl.textContent = 'last: ' + tag;
+}
+
+// ---------- hardware bridges ----------
+function buzz() { fetch('/vibrate').catch(function () {}); }
+function pollBattery() {
+  fetch('/battery', { cache: 'no-store' }).then(function (r) { return r.json(); })
+    .then(function (b) { if (b && typeof b.percentage === 'number') document.getElementById('status-battery').textContent = b.percentage + '%'; })
+    .catch(function () {});
+}
+
+// ---------- objectives ----------
+function renderObj() {
+  var el = document.getElementById('pane-obj');
+  el.innerHTML = '';
+  state.objectives.forEach(function (o) {
+    var d = document.createElement('div');
+    d.className = 'obj' + (o.done ? ' done' : '');
+    d.innerHTML = '<span class="tag">[' + o.p + ']</span> ' + o.t + (o.ll ? ' <span class="wp">&#9670;</span>' : '');
+    d.onclick = function () {
+      o.done = !o.done;
+      if (o.done) { buzz(); logEvent('OBJ', o.t + ' \u2014 COMPLETE', 'system'); }
+      save(); renderObj(); syncMarkers();
+    };
+    el.appendChild(d);
+  });
+}
+
+function renderIntel() {
+  var el = document.getElementById('intelList');
+  el.innerHTML = '';
+  state.intel.slice().reverse().forEach(function (n) {
+    var d = document.createElement('div');
+    d.className = 'intel';
+    d.innerHTML = '<div class="ts">' + n.ts + '</div>' + n.txt;
+    el.appendChild(d);
+  });
+}
+function addIntel() {
+  var txt = prompt('INTEL:');
+  if (!txt) return;
+  state.intel.push({ txt: txt, ts: new Date().toLocaleString() });
+  save(); renderIntel(); logEvent('MARK', txt);
+}
+
+// ---------- gps + waypoints ----------
+function setGps(msg) { document.getElementById('status-gps').textContent = msg; }
+function distM(a, b) {
+  var R = 6371000, rad = Math.PI / 180;
+  var dLat = (b[0] - a[0]) * rad, dLng = (b[1] - a[1]) * rad;
+  var s = Math.sin(dLat/2)*Math.sin(dLat/2) + Math.cos(a[0]*rad)*Math.cos(b[0]*rad)*Math.sin(dLng/2)*Math.sin(dLng/2);
+  return Math.round(R * 2 * Math.atan2(Math.sqrt(s), Math.sqrt(1-s)));
+}
+function fmtDist(m) { return m >= 1000 ? (m/1000).toFixed(1) + ' km' : m + ' m'; }
+
+var map = null, myPos = null, wpMarkers = [];
+function popupHtml(o) {
+  var h = '<span style="color:var(--muted)">[' + o.p + ']</span> ' + o.t;
+  if (myPos && o.ll) h += '<br>DIST: ' + fmtDist(distM(myPos, o.ll));
+  return h;
+}
+function syncMarkers() {
+  if (!map) return;
+  wpMarkers.forEach(function (m) { map.removeLayer(m); });
+  wpMarkers = [];
+  state.objectives.forEach(function (o) {
+    if (!o.ll) return;
+    var mk = L.circleMarker(o.ll, { radius: 9, color: o.done ? '#00aa66' : '#00ff99', fillColor: '#000', fillOpacity: 0.7, weight: 2 }).addTo(map);
+    mk.bindPopup(popupHtml(o)); mk._obj = o; wpMarkers.push(mk);
+  });
+}
+function refreshPopups() { wpMarkers.forEach(function (mk) { mk.setPopupContent(popupHtml(mk._obj)); }); }
+
+var mapStarted = false;
+function initMap() {
+  if (mapStarted) return;
+  mapStarted = true;
+  map = L.map('mapdiv', { zoomControl: false }).setView([45.5231, -122.6765], 14);
+  protomapsL.leafletLayer({ url: 'portland.pmtiles', theme: 'dark' }).addTo(map);
+  setTimeout(function () { map.invalidateSize(); }, 100);
+  syncMarkers();
+  if (!navigator.geolocation) { setGps('N/A'); return; }
+  setGps('ACQ\u2026');
+  var me = null;
+  navigator.geolocation.watchPosition(function (p) {
+    myPos = [p.coords.latitude, p.coords.longitude];
+    setGps('LOCK');
+    document.getElementById('hud-coords').textContent = 'COORD: ' + myPos[0].toFixed(6) + ', ' + myPos[1].toFixed(6);
+    if (!me) { me = L.circleMarker(myPos, { radius: 7, color: '#00ff99', fillColor: '#00ff99', fillOpacity: 0.9 }).addTo(map); map.setView(myPos, 15); }
+    else { me.setLatLng(myPos); }
+    refreshPopups();
+  }, function (e) {
+    var names = { 1: 'DENIED', 2: 'NO-FIX', 3: 'TIMEOUT' };
+    setGps(names[e.code] || 'ERR');
+    logEvent('GPS', 'err ' + e.code + ' ' + (names[e.code] || ''), 'alert');
+  }, { enableHighAccuracy: true, timeout: 30000, maximumAge: 5000 });
+}
+
+// ---------- sense ----------
+function bars(level) {
+  var n;
+  if (level >= -55) n = 4; else if (level >= -67) n = 3; else if (level >= -78) n = 2; else if (level >= -88) n = 1; else n = 0;
+  var s = ''; for (var i = 0; i < 4; i++) s += (i < n ? '\u2588' : '\u2591'); return s;
+}
+function row(name, meta, level) {
+  var d = document.createElement('div'); d.className = 'node';
+  var sig = (typeof level === 'number') ? '<span class="sig">' + bars(level) + '</span>' : '<span class="sig" style="color:var(--muted)">----</span>';
+  d.innerHTML = sig + '<span class="nm">' + (name || '&lt;unknown&gt;') + '</span><span class="meta">' + (meta || '') + '</span>';
+  return d;
+}
+function errLine(msg) { var d = document.createElement('div'); d.className = 'err'; d.textContent = msg; return d; }
+function scan() {
+  var el = document.getElementById('senseList');
+  el.innerHTML = '<div class="err">SWEEPING\u2026</div>';
+  logEvent('SCAN', 'sector sweep initiated');
+  fetch('/scan', { cache: 'no-store' }).then(function (r) { return r.json(); }).then(function (d) {
+    el.innerHTML = '';
+    var wifi = d.wifi || [];
+    var ws = document.createElement('div'); ws.className = 'sect'; ws.textContent = 'WIFI \u2014 ' + wifi.length; el.appendChild(ws);
+    if (d.wifi_error) el.appendChild(errLine(d.wifi_error));
+    wifi.sort(function (a, b) { return (b.rssi || b.level || -999) - (a.rssi || a.level || -999); });
+    wifi.forEach(function (ap) {
+      var lvl = (typeof ap.rssi === 'number') ? ap.rssi : ap.level;
+      el.appendChild(row(ap.ssid || '<hidden>', (lvl != null ? lvl + 'dBm ' : '') + (ap.frequency ? ap.frequency + 'MHz' : ''), lvl));
+    });
+    var ble = d.ble || [];
+    var bs = document.createElement('div'); bs.className = 'sect'; bs.textContent = 'BLE \u2014 ' + ble.length; el.appendChild(bs);
+    if (d.ble_error) el.appendChild(errLine(d.ble_error));
+    ble.forEach(function (dev) { el.appendChild(row(dev.name || dev.address || '<unnamed>', dev.address || '', (typeof dev.rssi === 'number') ? dev.rssi : null)); });
+    logEvent('SCAN', wifi.length + ' wifi / ' + ble.length + ' ble', 'system');
+  }).catch(function (e) { el.innerHTML = ''; el.appendChild(errLine('SCAN FAILED: ' + e.message)); logEvent('SCAN', 'failed', 'alert'); });
+}
 
 
-FIELD LOG / ALERTS
-LOCAL ONLY
-MARK
-LOG INTEL
-SCAN
-WIFI + BLE
-RECON
-OWN LAN
+// ---------- recon (own LAN only) ----------
+function netscan() {
+  var el = document.getElementById('senseList');
+  // jump user to SENSE view so they see output
+  document.querySelectorAll('#tabs .tab').forEach(function (t) { t.classList.remove('active'); });
+  var st = document.querySelector('#tabs .tab[data-v=\'sense\']'); if (st) st.classList.add('active');
+  Object.keys(panes).forEach(function (k) { document.getElementById(panes[k]).classList.remove('on'); });
+  document.getElementById('pane-map-hud').classList.remove('on');
+  document.getElementById('pane-sense').classList.add('on');
 
-0 events
-last: none
+  el.innerHTML = '<div class="err">RECON SWEEP\u2026 own subnet only</div>';
+  logEvent('RECON', 'LAN sweep initiated');
+  fetch('/netscan', { cache: 'no-store' }).then(function (r) { return r.json(); }).then(function (d) {
+    el.innerHTML = '';
+    if (d.error) { el.appendChild(errLine(d.error)); logEvent('RECON', 'blocked: ' + d.error, 'alert'); return; }
+    var s = document.createElement('div'); s.className = 'sect';
+    s.textContent = 'LAN ' + d.subnet + ' \u2014 ' + d.count + ' host' + (d.count === 1 ? '' : 's');
+    el.appendChild(s);
+    (d.hosts || []).forEach(function (h) {
+      var name = h.ip + (h.self ? '  \u25c0 THIS UNIT' : '');
+      var meta = (h.host ? h.host + '  ' : '') + (h.ports && h.ports.length ? '[' + h.ports.join(' ') + ']' : 'no open ports');
+      el.appendChild(row(name, meta, null));
+    });
+    logEvent('RECON', d.count + ' hosts on ' + d.subnet, 'system');
+  }).catch(function (e) { el.innerHTML = ''; el.appendChild(errLine('RECON FAILED: ' + e.message)); logEvent('RECON', 'failed', 'alert'); });
+}
+
+// ---------- tabs ----------
+var panes = { obj: 'pane-obj', intel: 'pane-intel', sense: 'pane-sense' };
+document.querySelectorAll('#tabs .tab').forEach(function (tab) {
+  tab.onclick = function () {
+    document.querySelectorAll('#tabs .tab').forEach(function (t) { t.classList.remove('active'); });
+    tab.classList.add('active');
+    var v = tab.dataset.v;
+    // hide all overlays
+    Object.keys(panes).forEach(function (k) { document.getElementById(panes[k]).classList.remove('on'); });
+    document.getElementById('pane-map-hud').classList.remove('on');
+    if (v === 'map') { document.getElementById('pane-map-hud').classList.add('on'); initMap(); }
+    else { document.getElementById(panes[v]).classList.add('on'); }
+  };
+});
+
+// ---------- action buttons ----------
+document.querySelectorAll('.action-btn').forEach(function (b) {
+  b.onclick = function () {
+    var a = b.dataset.action;
+    if (a === 'mark') addIntel();
+    else if (a === 'scan') scan();
+    else if (a === 'recon') netscan();
+  };
+});
+
+// ---------- boot ----------
+pollBattery(); setInterval(pollBattery, 60000);
+renderObj(); renderIntel();
+logEvent('SYS', 'OPSAT online', 'system');
+</script>
+</body>
+</html>
