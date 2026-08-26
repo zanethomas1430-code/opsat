@@ -1,4 +1,4 @@
-/usr/bin/env python
+#!/usr/bin/env python
 # OPSAT server. Static files with HTTP range support (pmtiles needs it),
 # plus small local endpoints. No accounts, no cloud, no content logging.
 #
