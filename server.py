@@ -1,4 +1,4 @@
-#!/usr/bin/env python
+/usr/bin/env python
 # OPSAT server. Static files with HTTP range support (pmtiles needs it),
 # plus small local endpoints. No accounts, no cloud, no content logging.
 #
@@ -38,6 +38,70 @@ def run(cmd, timeout=15):
         return False, 'command not found (termux-api installed?)'
     except Exception as e:
         return False, str(e)
+
+
+
+import socket
+import ipaddress
+import re as _re
+
+def own_subnet():
+    """Return the /24 the phone's primary interface sits on, or None.
+    We derive it from the outbound-route source IP; we never accept a
+    target from the client, so scans can only ever hit our own LAN."""
+    try:
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        s.connect(('192.168.0.1', 1))   # no packet sent; just picks the iface
+        ip = s.getsockname()[0]
+        s.close()
+    except Exception:
+        try:
+            ip = socket.gethostbyname(socket.gethostname())
+        except Exception:
+            return None, None
+    # refuse anything that isn't RFC1918 private space -> hard scope lock
+    try:
+        addr = ipaddress.ip_address(ip)
+    except ValueError:
+        return None, None
+    if not addr.is_private:
+        return None, ip
+    net = ipaddress.ip_network(ip + '/24', strict=False)
+    return net, ip
+
+
+def netscan():
+    net, ip = own_subnet()
+    if net is None:
+        return {'error': 'no private LAN detected (scope lock: private /24 only)', 'self': ip}
+    # conservative discovery: ping sweep + a few common ports, no aggressive probes.
+    # -sn would be ping-only; we do a light port check on a small, safe set.
+    ports = '22,80,443,8080,8022,9100,53,139,445,3389,5353'
+    ok, out = run(['nmap', '-T3', '--max-retries', '1', '--host-timeout', '20s',
+                   '-p', ports, '--open', '-oG', '-', str(net)], timeout=120)
+    if not ok:
+        return {'error': out, 'subnet': str(net), 'self': ip}
+    hosts = []
+    for line in out.splitlines():
+        if not line.startswith('Host:'):
+            continue
+        m = _re.search(r'Host:\s+(\S+)\s+\(([^)]*)\)', line)
+        if not m:
+            continue
+        host_ip = m.group(1)
+        hostname = m.group(2)
+        openp = []
+        pm = _re.search(r'Ports:\s+(.*?)(?:\tIgnored|$)', line)
+        if pm:
+            for chunk in pm.group(1).split(','):
+                parts = chunk.strip().split('/')
+                if len(parts) >= 5 and parts[1] == 'open':
+                    svc = parts[4] or parts[2]
+                    openp.append(parts[0] + ('/' + svc if svc else ''))
+        hosts.append({'ip': host_ip, 'host': hostname, 'ports': openp,
+                      'self': (host_ip == ip)})
+    hosts.sort(key=lambda h: tuple(int(x) for x in h['ip'].split('.')))
+    return {'subnet': str(net), 'self': ip, 'count': len(hosts), 'hosts': hosts}
 
 
 class OpsatHandler(RangeRequestHandler):
@@ -104,6 +168,11 @@ class OpsatHandler(RangeRequestHandler):
                 result['ble'] = []
                 result['ble_error'] = out
             self._json(result)
+            return
+
+
+        if self.path == '/netscan':
+            self._json(netscan())
             return
 
         super().do_GET()
