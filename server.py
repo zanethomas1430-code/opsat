@@ -172,11 +172,12 @@ _mag_latest = {"disturb": None, "accel": None, "ts": None, "note": "idle"}
 _mag_baseline_ema = None
 
 def _kill_sensor():
+    # non-blocking: signal the process and move on. The worker loop also
+    # self-exits when _active_sensor changes, so we never wait here (waiting
+    # would hold the request/lock and exhaust browser connections).
     p = _sensor_proc.get("p")
     if p and p.poll() is None:
-        try:
-            p.terminate()
-            p.wait(timeout=3)
+        try: p.terminate()
         except Exception:
             try: p.kill()
             except Exception: pass
@@ -236,21 +237,21 @@ def _sensor_worker(which):
         with _light_lock: _light_latest["note"] = "stream error: " + str(e)
 
 def select_sensor(which):
-    """Switch the single active sensor. which in {'light','emi',None}."""
+    """Switch the single active sensor. Returns immediately; never blocks."""
     target = "light" if which == "light" else ("accelerometer" if which == "emi" else None)
     with _sensor_lock:
         if _active_sensor["which"] == target:
             return
-        _active_sensor["which"] = target
-        _kill_sensor()
-        # mark the now-idle one
-        if target != "light":
-            with _light_lock: _light_latest["note"] = "idle"
-        if target != "accelerometer":
-            with _mag_lock: _mag_latest["note"] = "idle"
-        if target:
-            threading.Thread(target=_sensor_worker, args=(target,),
-                             name="sensor-"+target, daemon=True).start()
+        _active_sensor["which"] = target      # tiny, fast state swap only
+    # everything below is outside the lock so a request never stalls:
+    _kill_sensor()
+    if target != "light":
+        with _light_lock: _light_latest["note"] = "idle"
+    if target != "accelerometer":
+        with _mag_lock: _mag_latest["note"] = "idle"
+    if target:
+        threading.Thread(target=_sensor_worker, args=(target,),
+                         name="sensor-"+target, daemon=True).start()
 
 def start_sensor_stream():
     # nothing auto-starts now; the UI selects a sensor on demand.
