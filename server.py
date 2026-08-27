@@ -168,7 +168,7 @@ _sensor_proc = {"p": None}
 _light_lock = threading.Lock()
 _light_latest = {"lux": None, "ts": None, "note": "idle"}
 _mag_lock = threading.Lock()
-_mag_latest = {"disturb": None, "accel": None, "ts": None, "note": "idle"}
+_mag_latest = {"phase": "idle", "arm_left": 0, "disturb": None, "accel": None, "ts": None, "note": "idle"}
 _mag_baseline_ema = None
 
 def _kill_sensor():
@@ -255,45 +255,101 @@ def _extract_values(raw):
             return v["values"], ""
     return None, "no values key"
 
+# ntfy push config: set NTFY_TOPIC to your private topic (any hard-to-guess
+# string). iPhone: install ntfy app, subscribe to the same topic.
+NTFY_TOPIC = "opsat-zane-tripwire-7h2k9"   # <-- change to your own secret topic
+NTFY_URL = "https://ntfy.sh/" + NTFY_TOPIC
+
+# Tripwire state, exposed via /emi/live:
+#   phase: "idle" | "arming" | "armed" | "tripped"
+_trip = {"phase": "idle", "arm_left": 0, "locked_baseline": None,
+         "disturb": 0.0, "last_trip_ts": 0}
+
+ARM_SECONDS = 3.0
+TRIP_THRESHOLD = 0.12      # deviation from locked baseline that counts as motion
+REARM_COOLDOWN = 4.0       # seconds after a trip before it re-arms
+
+def _ntfy(msg, title="OPSAT", priority="high", tags="rotating_light"):
+    try:
+        req = _urlreq.Request(NTFY_URL, data=msg.encode("utf-8"),
+                              headers={"Title": title, "Priority": priority,
+                                       "Tags": tags})
+        _urlreq.urlopen(req, timeout=8).read()
+        return True
+    except Exception:
+        return False
+
+def _read_accel_mag():
+    r = subprocess.run(["termux-sensor", "-s", "accelerometer", "-n", "1"],
+                       capture_output=True, text=True, timeout=6)
+    if r.returncode != 0:
+        return None, "rc=%d" % r.returncode
+    vals, err = _extract_values(r.stdout)
+    if vals and len(vals) >= 3:
+        return _math.sqrt(sum(float(x) ** 2 for x in vals[:3])), ""
+    return None, err
+
 def _motion_poll_loop():
-    global _mag_baseline_ema
+    # Fresh arm each time the sensor is selected.
+    _trip["phase"] = "arming"
+    _trip["arm_left"] = ARM_SECONDS
+    _trip["locked_baseline"] = None
+    arm_start = time.time()
+    samples = []
     while _active_sensor["which"] == "accelerometer":
         note = ""
         try:
-            r = subprocess.run(
-                ["termux-sensor", "-s", "accelerometer", "-n", "1"],
-                capture_output=True, text=True, timeout=6)
-            if r.returncode != 0:
-                note = "rc=%d %s" % (r.returncode, (r.stderr or "")[:50])
+            amag, err = _read_accel_mag()
+            if amag is None:
+                note = err
             else:
-                vals, err = _extract_values(r.stdout)
-                if vals and len(vals) >= 3:
-                    amag = _math.sqrt(sum(float(x) ** 2 for x in vals[:3]))
-                    if _mag_baseline_ema is None:
-                        _mag_baseline_ema = amag
-                    else:
-                        # Adapt baseline faster (15%/read ~= converges in a few
-                        # seconds) so disturbance falls back to ~0 when still.
-                        _mag_baseline_ema = 0.08 * amag + 0.92 * _mag_baseline_ema
-                    disturb = abs(amag - _mag_baseline_ema)
-                    # deadband: ignore sub-0.15 jitter so a still phone reads 0
-                    if disturb < 0.05:
-                        disturb = 0.0
-                    with _mag_lock:
-                        _mag_latest["disturb"] = round(disturb, 2)
-                        _mag_latest["accel"] = round(amag, 2)
-                        _mag_latest["ts"] = time.time()
-                        _mag_latest["note"] = ""
-                else:
-                    note = err
+                phase = _trip["phase"]
+                if phase == "arming":
+                    samples.append(amag)
+                    left = ARM_SECONDS - (time.time() - arm_start)
+                    _trip["arm_left"] = max(0, round(left, 1))
+                    if left <= 0:
+                        # lock baseline = average of the arming window
+                        _trip["locked_baseline"] = sum(samples) / len(samples)
+                        _trip["phase"] = "armed"
+                        samples = []
+                        _ntfy("OPSAT armed - watching for movement",
+                              title="OPSAT ARMED", priority="default", tags="white_check_mark")
+                elif phase == "armed":
+                    base = _trip["locked_baseline"]
+                    dev = abs(amag - base)
+                    _trip["disturb"] = round(dev, 2)
+                    if dev > TRIP_THRESHOLD:
+                        _trip["phase"] = "tripped"
+                        _trip["last_trip_ts"] = time.time()
+                        ts = time.strftime("%H:%M:%S")
+                        _ntfy("OPSAT MOVED at %s (dev %.2f)" % (ts, dev),
+                              title="\u26a0 OPSAT TRIPPED", priority="urgent",
+                              tags="rotating_light")
+                elif phase == "tripped":
+                    # hold tripped through cooldown, then auto re-arm
+                    if time.time() - _trip["last_trip_ts"] > REARM_COOLDOWN:
+                        _trip["phase"] = "arming"
+                        _trip["arm_left"] = ARM_SECONDS
+                        _trip["locked_baseline"] = None
+                        arm_start = time.time()
+                        samples = []
+                # publish state for the UI
+                with _mag_lock:
+                    _mag_latest["phase"] = _trip["phase"]
+                    _mag_latest["arm_left"] = _trip["arm_left"]
+                    _mag_latest["disturb"] = _trip["disturb"]
+                    _mag_latest["accel"] = round(amag, 2)
+                    _mag_latest["ts"] = time.time()
+                    _mag_latest["note"] = ""
         except subprocess.TimeoutExpired:
             note = "timeout (6s)"
-        except Exception as e:
-            note = (type(e).__name__ + ": " + str(e))[:60]
+        except Exception as ex:
+            note = (type(ex).__name__ + ": " + str(ex))[:60]
         if note:
             with _mag_lock:
                 _mag_latest["note"] = note
-        time.sleep(0.4)
+        time.sleep(0.3)
 
 def start_motion_poll():
     threading.Thread(target=_motion_poll_loop, name="motion-poll", daemon=True).start()
