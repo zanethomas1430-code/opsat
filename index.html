@@ -302,6 +302,7 @@ function distM(a, b) {
 function fmtDist(m) { return m >= 1000 ? (m/1000).toFixed(1) + ' km' : m + ' m'; }
 
 var map = null, myPos = null, wpMarkers = [];
+var camMarkers = [], camPoints = [];
 function popupHtml(o) {
   var h = '<span style="color:var(--muted)">[' + o.p + ']</span> ' + o.t;
   if (myPos && o.ll) h += '<br>DIST: ' + fmtDist(distM(myPos, o.ll));
@@ -319,6 +320,46 @@ function syncMarkers() {
 }
 function refreshPopups() { wpMarkers.forEach(function (mk) { mk.setPopupContent(popupHtml(mk._obj)); }); }
 
+
+function loadCameras() {
+  fetch('/cameras', { cache: 'no-store' }).then(function (r) { return r.json(); })
+    .then(function (d) {
+      camPoints = d.cameras || [];
+      camMarkers.forEach(function (m) { map.removeLayer(m); });
+      camMarkers = [];
+      camPoints.forEach(function (c) {
+        var mk = L.circleMarker([c.lat, c.lon], {
+          radius: 6, color: '#ff3366', fillColor: '#ff3366',
+          fillOpacity: 0.85, weight: 1
+        }).addTo(map);
+        mk.bindPopup('ALPR CAMERA<br>' + (c.mfr || 'unknown mfr') +
+                     (c.dir ? '<br>facing ' + c.dir : ''));
+        camMarkers.push(mk);
+      });
+      var log = (typeof logEvent === 'function');
+      if (log) logEvent('WATCH', camPoints.length + ' ALPR cams loaded', 'system');
+    }).catch(function () {});
+}
+
+
+var _camWarned = {};
+function checkCamProximity() {
+  if (!myPos || !camPoints.length) return;
+  var nearest = null, nd = 1e9;
+  camPoints.forEach(function (c) {
+    var d = distM(myPos, [c.lat, c.lon]);
+    if (d < nd) { nd = d; nearest = c; }
+  });
+  if (nearest && nd <= 150) {
+    var key = nearest.lat + ',' + nearest.lon;
+    if (!_camWarned[key]) {
+      _camWarned[key] = true;
+      if (typeof logEvent === 'function') logEvent('WATCH', 'ALPR ' + Math.round(nd) + 'm ' + (nearest.mfr||''), 'alert');
+      if (typeof buzz === 'function') buzz();
+    }
+  }
+}
+
 var mapStarted = false;
 function initMap() {
   if (mapStarted) return;
@@ -327,12 +368,14 @@ function initMap() {
   protomapsL.leafletLayer({ url: 'portland.pmtiles', theme: 'dark' }).addTo(map);
   setTimeout(function () { map.invalidateSize(); }, 100);
   syncMarkers();
+  loadCameras();
   if (!navigator.geolocation) { setGps('N/A'); return; }
   setGps('ACQ\u2026');
   var me = null;
   navigator.geolocation.watchPosition(function (p) {
     myPos = [p.coords.latitude, p.coords.longitude];
     setGps('LOCK');
+    checkCamProximity();
     document.getElementById('hud-coords').textContent = 'COORD: ' + myPos[0].toFixed(6) + ', ' + myPos[1].toFixed(6);
     if (!me) { me = L.circleMarker(myPos, { radius: 7, color: '#00ff99', fillColor: '#00ff99', fillOpacity: 0.9 }).addTo(map); map.setView(myPos, 15); }
     else { me.setLatLng(myPos); }

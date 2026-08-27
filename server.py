@@ -20,6 +20,7 @@ import subprocess
 import time
 import urllib.request as _urlreq
 import urllib.error as _urlerr
+import urllib.parse as _urlparse
 import threading
 from http.server import ThreadingHTTPServer
 from RangeHTTPServer import RangeRequestHandler
@@ -318,6 +319,39 @@ def _live_sensor_context():
     return "; ".join(parts)
 
 
+
+# ---- ALPR / Flock camera awareness: fetch-once, cache-to-disk, serve local --
+CAM_CACHE = os.path.join(BASE, "cameras.json")
+# Portland metro bbox (S,W,N,E) -- same area as the offline map
+CAM_BBOX = "45.448,-122.815,45.662,-122.473"
+OVERPASS = "https://overpass-api.de/api/interpreter"
+
+def _fetch_cameras():
+    """One-time pull of ALPR nodes from OpenStreetMap via Overpass.
+    This is the ONLY outbound call; after caching, /cameras is fully local."""
+    q = ('[out:json][timeout:25];node["surveillance:type"="ALPR"](%s);out body;'
+         % CAM_BBOX)
+    data = _urlparse.urlencode({"data": q}).encode()
+    req = _urlreq.Request(OVERPASS, data=data,
+                          headers={"User-Agent": "opsat/1.0 (personal)"})
+    with _urlreq.urlopen(req, timeout=45) as r:
+        j = json.loads(r.read().decode("utf-8"))
+    pts = []
+    for e in j.get("elements", []):
+        if "lat" not in e or "lon" not in e:
+            continue
+        t = e.get("tags", {})
+        pts.append({
+            "lat": e["lat"], "lon": e["lon"],
+            "mfr": t.get("manufacturer", ""),
+            "dir": t.get("camera:direction", ""),
+            "type": t.get("surveillance:type", "ALPR"),
+        })
+    with open(CAM_CACHE, "w") as f:
+        json.dump({"count": len(pts), "cameras": pts}, f)
+    return pts
+
+
 class OpsatHandler(RangeRequestHandler):
 
     def _json(self, obj, code=200):
@@ -414,6 +448,29 @@ class OpsatHandler(RangeRequestHandler):
             with _mag_lock:
                 snap = dict(_mag_latest)
             self._json(snap)
+            return
+
+
+        if self.path == '/cameras':
+            try:
+                with open(CAM_CACHE) as f:
+                    self._json(json.load(f)); return
+            except FileNotFoundError:
+                # no cache yet -> try one fetch, fall back to empty+hint
+                try:
+                    pts = _fetch_cameras()
+                    self._json({"count": len(pts), "cameras": pts})
+                except Exception as e:
+                    self._json({"count": 0, "cameras": [],
+                                "note": "no cache; fetch failed (need internet once): " + str(e)})
+            return
+
+        if self.path == '/cameras/refresh':
+            try:
+                pts = _fetch_cameras()
+                self._json({"ok": True, "count": len(pts)})
+            except Exception as e:
+                self._json({"ok": False, "error": str(e)})
             return
 
         super().do_GET()
