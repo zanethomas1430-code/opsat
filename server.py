@@ -156,67 +156,19 @@ def nfc_write(text):
 
 
 
-# ---- live light meter: one persistent sensor stream, newest value shared ----
+# ---- combined sensor stream: ONE termux-sensor process, both dials ----
+# Android typically allows only one termux-sensor at a time, so we read
+# light AND magnetic in a single stream and fan the values out.
+import math as _math
 _light_lock = threading.Lock()
 _light_latest = {"lux": None, "ts": None, "note": "starting"}
-
-def _light_stream_loop():
-    cmd = ["termux-sensor", "-s", "light", "-d", "200"]  # ~5 readings/sec
-    while True:
-        try:
-            proc = subprocess.Popen(cmd, stdout=subprocess.PIPE,
-                                    stderr=subprocess.DEVNULL, bufsize=1,
-                                    universal_newlines=True)
-            buf = ""
-            depth = 0
-            started = False
-            for ch in iter(lambda: proc.stdout.read(1), ""):
-                if ch == "{":
-                    depth += 1; started = True
-                if started:
-                    buf += ch
-                if ch == "}":
-                    depth -= 1
-                    if depth == 0 and started:
-                        # we have one complete top-level JSON object
-                        try:
-                            data = json.loads(buf)
-                            lux = None
-                            for _, v in data.items():
-                                vals = v.get("values") if isinstance(v, dict) else None
-                                if vals:
-                                    lux = float(vals[0]); break
-                            if lux is not None:
-                                with _light_lock:
-                                    _light_latest["lux"] = round(lux, 1)
-                                    _light_latest["ts"] = time.time()
-                                    _light_latest["note"] = ""
-                        except (ValueError, TypeError):
-                            pass
-                        buf = ""; started = False
-        except FileNotFoundError:
-            with _light_lock:
-                _light_latest["note"] = "termux-sensor not found"
-            return
-        except Exception as e:
-            with _light_lock:
-                _light_latest["note"] = "stream error: " + str(e)
-        time.sleep(1)
-
-def start_light_stream():
-    threading.Thread(target=_light_stream_loop, name="light-stream", daemon=True).start()
-
-
-
-# ---- EMI / magnetometer: persistent stream, newest magnitude + baseline ----
-import math as _math
 _mag_lock = threading.Lock()
 _mag_latest = {"uT": None, "baseline": None, "ts": None, "note": "starting"}
 _mag_baseline_ema = None
 
-def _mag_stream_loop():
+def _sensor_stream_loop():
     global _mag_baseline_ema
-    cmd = ["termux-sensor", "-s", "magnetic", "-d", "200"]
+    cmd = ["termux-sensor", "-s", "light,magnetic", "-d", "200"]
     while True:
         try:
             proc = subprocess.Popen(cmd, stdout=subprocess.PIPE,
@@ -233,39 +185,47 @@ def _mag_stream_loop():
                     if depth == 0 and started:
                         try:
                             data = json.loads(buf)
-                            vals = None
-                            for _, v in data.items():
-                                if isinstance(v, dict) and v.get("values"):
-                                    vals = v["values"]; break
-                            if vals and len(vals) >= 3:
-                                mag = _math.sqrt(sum(float(x) ** 2 for x in vals[:3]))
-                                # slow EMA baseline so a sustained field becomes "normal"
-                                if _mag_baseline_ema is None:
-                                    _mag_baseline_ema = mag
-                                else:
-                                    _mag_baseline_ema = 0.02 * mag + 0.98 * _mag_baseline_ema
-                                with _mag_lock:
-                                    _mag_latest["uT"] = round(mag, 1)
-                                    _mag_latest["baseline"] = round(_mag_baseline_ema, 1)
-                                    _mag_latest["ts"] = time.time()
-                                    _mag_latest["note"] = ""
+                            # light: any key containing 'light'
+                            # magnetic: any key containing 'magnet'
+                            for name, v in data.items():
+                                if not isinstance(v, dict):
+                                    continue
+                                vals = v.get("values")
+                                if not vals:
+                                    continue
+                                lname = name.lower()
+                                if "light" in lname:
+                                    with _light_lock:
+                                        _light_latest["lux"] = round(float(vals[0]), 1)
+                                        _light_latest["ts"] = time.time()
+                                        _light_latest["note"] = ""
+                                elif "magnet" in lname and len(vals) >= 3:
+                                    mag = _math.sqrt(sum(float(x) ** 2 for x in vals[:3]))
+                                    if _mag_baseline_ema is None:
+                                        _mag_baseline_ema = mag
+                                    else:
+                                        _mag_baseline_ema = 0.02 * mag + 0.98 * _mag_baseline_ema
+                                    with _mag_lock:
+                                        _mag_latest["uT"] = round(mag, 1)
+                                        _mag_latest["baseline"] = round(_mag_baseline_ema, 1)
+                                        _mag_latest["ts"] = time.time()
+                                        _mag_latest["note"] = ""
                         except (ValueError, TypeError):
                             pass
                         buf = ""; started = False
         except FileNotFoundError:
+            with _light_lock:
+                _light_latest["note"] = "termux-sensor not found"
             with _mag_lock:
                 _mag_latest["note"] = "termux-sensor not found"
             return
         except Exception as e:
-            with _mag_lock:
-                _mag_latest["note"] = "stream error: " + str(e)
+            with _light_lock:
+                _light_latest["note"] = "stream error: " + str(e)
         time.sleep(1)
 
-def start_mag_stream():
-    threading.Thread(target=_mag_stream_loop, name="mag-stream", daemon=True).start()
-
-
-
+def start_sensor_stream():
+    threading.Thread(target=_sensor_stream_loop, name="sensor-stream", daemon=True).start()
 AI_UPSTREAM = "http://127.0.0.1:8081/completion"
 
 OPSAT_SYSTEM = (
@@ -517,9 +477,11 @@ class OpsatHandler(RangeRequestHandler):
 
 if __name__ == '__main__':
     os.chdir(BASE)
-    if _HAS_DW:
-        dungeon_weather.start()
-    start_light_stream()
-    start_mag_stream()
+    # dungeon_weather.start() disabled: it spawned its own termux-sensor
+    # calls that collided with the combined sensor stream. Re-enable only
+    # after refactoring it to read the shared _light_latest/_mag_latest.
+    # if _HAS_DW:
+    #     dungeon_weather.start()
+    start_sensor_stream()
     print('OPSAT server on port %d (static + range + drop + battery/vibrate/scan/nfc/sense/light/emi)' % PORT)
     ThreadingHTTPServer(('', PORT), OpsatHandler).serve_forever()
