@@ -238,35 +238,56 @@ def _sensor_worker(which):
 
 
 # ---- motion: one-shot polling (robust; streaming was unreliable here) ------
+def _extract_values(raw):
+    """Pull the first values[] array out of termux-sensor output, tolerating
+    leading/trailing junk lines by locating the JSON braces."""
+    if not raw:
+        return None, "empty output"
+    s = raw.find("{"); e = raw.rfind("}")
+    if s < 0 or e < 0:
+        return None, "no json in: " + raw[:60].replace(chr(10), " ")
+    try:
+        data = json.loads(raw[s:e+1])
+    except Exception as ex:
+        return None, "parse: " + str(ex)[:50]
+    for name, v in data.items():
+        if isinstance(v, dict) and v.get("values"):
+            return v["values"], ""
+    return None, "no values key"
+
 def _motion_poll_loop():
     global _mag_baseline_ema
     while _active_sensor["which"] == "accelerometer":
+        note = ""
         try:
-            out = subprocess.run(
+            r = subprocess.run(
                 ["termux-sensor", "-s", "accelerometer", "-n", "1"],
-                capture_output=True, text=True, timeout=2).stdout
-            data = json.loads(out)
-            vals = None
-            for name, v in data.items():
-                if isinstance(v, dict) and v.get("values"):
-                    vals = v["values"]; break
-            if vals and len(vals) >= 3:
-                amag = _math.sqrt(sum(float(x) ** 2 for x in vals[:3]))
-                if _mag_baseline_ema is None:
-                    _mag_baseline_ema = amag
+                capture_output=True, text=True, timeout=6)
+            if r.returncode != 0:
+                note = "rc=%d %s" % (r.returncode, (r.stderr or "")[:50])
+            else:
+                vals, err = _extract_values(r.stdout)
+                if vals and len(vals) >= 3:
+                    amag = _math.sqrt(sum(float(x) ** 2 for x in vals[:3]))
+                    if _mag_baseline_ema is None:
+                        _mag_baseline_ema = amag
+                    else:
+                        _mag_baseline_ema = 0.01 * amag + 0.99 * _mag_baseline_ema
+                    disturb = abs(amag - _mag_baseline_ema)
+                    with _mag_lock:
+                        _mag_latest["disturb"] = round(disturb, 2)
+                        _mag_latest["accel"] = round(amag, 2)
+                        _mag_latest["ts"] = time.time()
+                        _mag_latest["note"] = ""
                 else:
-                    # SLOW baseline so a real move stands out instead of being
-                    # absorbed: 1% new, 99% old.
-                    _mag_baseline_ema = 0.01 * amag + 0.99 * _mag_baseline_ema
-                disturb = abs(amag - _mag_baseline_ema)
-                with _mag_lock:
-                    _mag_latest["disturb"] = round(disturb, 2)
-                    _mag_latest["accel"] = round(amag, 2)
-                    _mag_latest["ts"] = time.time()
-                    _mag_latest["note"] = ""
+                    note = err
+        except subprocess.TimeoutExpired:
+            note = "timeout (6s)"
         except Exception as e:
+            note = (type(e).__name__ + ": " + str(e))[:60]
+        if note:
             with _mag_lock:
-                _mag_latest["note"] = "motion err: " + str(e)[:40]
+                _mag_latest["note"] = note
         time.sleep(0.4)
 
 def start_motion_poll():
