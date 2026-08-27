@@ -236,6 +236,43 @@ def _sensor_worker(which):
     except Exception as e:
         with _light_lock: _light_latest["note"] = "stream error: " + str(e)
 
+
+# ---- motion: one-shot polling (robust; streaming was unreliable here) ------
+def _motion_poll_loop():
+    global _mag_baseline_ema
+    while _active_sensor["which"] == "accelerometer":
+        try:
+            out = subprocess.run(
+                ["termux-sensor", "-s", "accelerometer", "-n", "1"],
+                capture_output=True, text=True, timeout=2).stdout
+            data = json.loads(out)
+            vals = None
+            for name, v in data.items():
+                if isinstance(v, dict) and v.get("values"):
+                    vals = v["values"]; break
+            if vals and len(vals) >= 3:
+                amag = _math.sqrt(sum(float(x) ** 2 for x in vals[:3]))
+                if _mag_baseline_ema is None:
+                    _mag_baseline_ema = amag
+                else:
+                    # SLOW baseline so a real move stands out instead of being
+                    # absorbed: 1% new, 99% old.
+                    _mag_baseline_ema = 0.01 * amag + 0.99 * _mag_baseline_ema
+                disturb = abs(amag - _mag_baseline_ema)
+                with _mag_lock:
+                    _mag_latest["disturb"] = round(disturb, 2)
+                    _mag_latest["accel"] = round(amag, 2)
+                    _mag_latest["ts"] = time.time()
+                    _mag_latest["note"] = ""
+        except Exception as e:
+            with _mag_lock:
+                _mag_latest["note"] = "motion err: " + str(e)[:40]
+        time.sleep(0.4)
+
+def start_motion_poll():
+    threading.Thread(target=_motion_poll_loop, name="motion-poll", daemon=True).start()
+
+
 def select_sensor(which):
     """Switch the single active sensor. Returns immediately; never blocks."""
     target = "light" if which == "light" else ("accelerometer" if which == "emi" else None)
@@ -249,9 +286,11 @@ def select_sensor(which):
         with _light_lock: _light_latest["note"] = "idle"
     if target != "accelerometer":
         with _mag_lock: _mag_latest["note"] = "idle"
-    if target:
+    if target == "light":
         threading.Thread(target=_sensor_worker, args=(target,),
                          name="sensor-"+target, daemon=True).start()
+    elif target == "accelerometer":
+        start_motion_poll()
 
 def start_sensor_stream():
     # nothing auto-starts now; the UI selects a sensor on demand.
@@ -524,4 +563,9 @@ if __name__ == '__main__':
     #     dungeon_weather.start()
     start_sensor_stream()
     print('OPSAT server on port %d (static + range + drop + battery/vibrate/scan/nfc/sense/light/emi)' % PORT)
-    ThreadingHTTPServer(('', PORT), OpsatHandler).serve_forever()
+    class HardenedServer(ThreadingHTTPServer):
+        daemon_threads = True        # worker threads don't outlive the process
+        request_queue_size = 32      # absorb short bursts of taps
+    OpsatHandler.timeout = 10        # a handler can't block a socket forever
+    srv = HardenedServer(('', PORT), OpsatHandler)
+    srv.serve_forever()
