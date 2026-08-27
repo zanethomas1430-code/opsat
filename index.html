@@ -103,6 +103,22 @@
   #lm-lab { margin-left: auto; font-size: 13px; letter-spacing: .1em; }
   #lm-barwrap { height: 14px; margin-top: 6px; border: 1px solid #0a2a1a; background: #020a06; border-radius: 2px; overflow: hidden; }
   #lm-bar { height: 100%; width: 0%; background: linear-gradient(90deg,#063,#0f9 60%,#6f8); transition: width .1s linear; }
+
+  #emi-live { padding: 6px 4px 10px; border-bottom: 1px solid #0a2a1a; margin-bottom: 8px; }
+  #emi-val { font-size: 30px; font-weight: bold; color: var(--accent); min-width: 60px; }
+  #emi-lab { margin-left: auto; font-size: 13px; letter-spacing: .1em; }
+  #emi-barwrap { height: 14px; margin-top: 6px; border: 1px solid #0a2a1a; background: #0a0602; border-radius: 2px; overflow: hidden; }
+  #emi-bar { height: 100%; width: 0%; background: linear-gradient(90deg,#340,#fa0 55%,#f33); transition: width .1s linear; }
+
+  #ai-log { max-height: 46vh; overflow-y: auto; font-size: 13px; padding: 4px; }
+  .ai-msg { padding: 6px 4px; border-bottom: 1px solid #0a2a1a; white-space: pre-wrap; }
+  .ai-msg .who { color: var(--muted); font-size: 10px; letter-spacing: .1em; }
+  .ai-msg.user .who { color: #6ec8ff; }
+  .ai-row { margin-top: 6px; }
+  #ai-input { width: 100%; background: #010504; color: var(--accent); border: 1px solid #0a5a34;
+              font: inherit; padding: 8px; border-radius: 2px; }
+  .ai-btns { display: flex; gap: 6px; margin-top: 6px; }
+  .ai-btns button { flex: 1; }
 </style>
 <link rel="stylesheet" href="vendor/leaflet.css">
 <script src="vendor/leaflet.js"></script>
@@ -125,6 +141,7 @@
       <div class="tab" data-v="intel">INTEL</div>
       <div class="tab" data-v="map">MAP</div>
       <div class="tab" data-v="sense">SENSE</div>
+      <div class="tab" data-v="ai">AI</div>
     </div>
 
     <div id="stage">
@@ -140,6 +157,16 @@
       <div id="pane-intel" class="pane">
         <div id="intelList"></div>
       </div>
+      <div id="pane-ai" class="pane">
+        <div id="ai-log"></div>
+        <div class="ai-row">
+          <input id="ai-input" placeholder="ask OPSAT..." autocomplete="off">
+        </div>
+        <div class="ai-btns">
+          <button onclick="aiSend(false)">SEND</button>
+          <button onclick="aiSend(true)">READ ROOM</button>
+        </div>
+      </div>
       <div id="pane-sense" class="pane">
         <div id="lm-live">
           <div class="lm-row">
@@ -148,6 +175,14 @@
             <span id="lm-lab"></span>
           </div>
           <div id="lm-barwrap"><div id="lm-bar"></div></div>
+        </div>
+        <div id="emi-live">
+          <div class="lm-row">
+            <span class="lm-cap">EMI</span>
+            <span id="emi-val">--</span><span class="lm-unit">µT</span>
+            <span id="emi-lab"></span>
+          </div>
+          <div id="emi-barwrap"><div id="emi-bar"></div></div>
         </div>
         <div id="senseList"><div class="err">Tap SCAN (in panel) to sweep.</div></div>
       </div>
@@ -445,8 +480,63 @@ function lmPoll() {
 function lmStart() { if (lmTimer) return; lmPoll(); lmTimer = setInterval(lmPoll, 150); }
 function lmStop() { if (lmTimer) { clearInterval(lmTimer); lmTimer = null; } }
 
+
+// ---------- live EMI meter (SENSE tab) ----------
+var emiTimer = null;
+function emiPoll() {
+  fetch('/emi/live', { cache: 'no-store' }).then(function (r) { return r.json(); })
+    .then(function (d) {
+      var val = document.getElementById('emi-val');
+      var lab = document.getElementById('emi-lab');
+      var bar = document.getElementById('emi-bar');
+      if (d.uT == null) { val.textContent = '--'; lab.textContent = d.note || 'no reading'; bar.style.width = '0%'; return; }
+      val.textContent = d.uT;
+      // deviation above baseline is the interesting signal
+      var base = d.baseline || d.uT;
+      var dev = d.uT - base;
+      // bar: map 0..200uT absolute onto width (earth ~50, strong sources >>100)
+      bar.style.width = Math.max(0, Math.min(100, d.uT / 200 * 100)) + '%';
+      var k;
+      if (dev > 60) k = { t: 'STRONG FIELD', c: '#f33' };
+      else if (dev > 20) k = { t: 'ELEVATED', c: '#fa0' };
+      else k = { t: 'AMBIENT', c: '#0a7' };
+      val.style.color = k.c; lab.textContent = k.t; lab.style.color = k.c;
+    }).catch(function () {});
+}
+function emiStart() { if (emiTimer) return; emiPoll(); emiTimer = setInterval(emiPoll, 150); }
+function emiStop() { if (emiTimer) { clearInterval(emiTimer); emiTimer = null; } }
+
+
+// ---------- AI panel ----------
+function aiAppend(who, text, cls) {
+  var log = document.getElementById('ai-log');
+  var d = document.createElement('div');
+  d.className = 'ai-msg' + (cls ? ' ' + cls : '');
+  d.innerHTML = '<div class="who">' + who + '</div>' + (text || '');
+  log.appendChild(d); log.scrollTop = log.scrollHeight;
+  return d;
+}
+function aiSend(useSensors) {
+  var inp = document.getElementById('ai-input');
+  var q = inp.value.trim();
+  if (!q && !useSensors) return;
+  if (q) aiAppend('YOU', q, 'user');
+  if (useSensors && !q) aiAppend('YOU', '[read room]', 'user');
+  inp.value = '';
+  var pending = aiAppend('OPSAT', 'thinking\u2026');
+  fetch('/ai', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ text: q, use_sensors: !!useSensors })
+  }).then(function (r) { return r.json(); }).then(function (d) {
+    pending.innerHTML = '<div class="who">OPSAT</div>' + (d.ok ? d.text : ('[' + d.error + ']'));
+    document.getElementById('ai-log').scrollTop = 1e9;
+  }).catch(function (e) {
+    pending.innerHTML = '<div class="who">OPSAT</div>[error: ' + e.message + ']';
+  });
+}
+
 // ---------- tabs ----------
-var panes = { obj: 'pane-obj', intel: 'pane-intel', sense: 'pane-sense' };
+var panes = { obj: 'pane-obj', intel: 'pane-intel', sense: 'pane-sense', ai: 'pane-ai' };
 document.querySelectorAll('#tabs .tab').forEach(function (tab) {
   tab.onclick = function () {
     document.querySelectorAll('#tabs .tab').forEach(function (t) { t.classList.remove('active'); });
@@ -457,7 +547,7 @@ document.querySelectorAll('#tabs .tab').forEach(function (tab) {
     document.getElementById('pane-map-hud').classList.remove('on');
     if (v === 'map') { document.getElementById('pane-map-hud').classList.add('on'); initMap(); }
     else { document.getElementById(panes[v]).classList.add('on'); }
-    if (v === 'sense') { lmStart(); } else { lmStop(); }
+    if (v === 'sense') { lmStart(); emiStart(); } else { lmStop(); emiStop(); }
   };
 });
 

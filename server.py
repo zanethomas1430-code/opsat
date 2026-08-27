@@ -18,6 +18,8 @@ import os
 import json
 import subprocess
 import time
+import urllib.request as _urlreq
+import urllib.error as _urlerr
 import threading
 from http.server import ThreadingHTTPServer
 from RangeHTTPServer import RangeRequestHandler
@@ -204,6 +206,118 @@ def start_light_stream():
     threading.Thread(target=_light_stream_loop, name="light-stream", daemon=True).start()
 
 
+
+# ---- EMI / magnetometer: persistent stream, newest magnitude + baseline ----
+import math as _math
+_mag_lock = threading.Lock()
+_mag_latest = {"uT": None, "baseline": None, "ts": None, "note": "starting"}
+_mag_baseline_ema = None
+
+def _mag_stream_loop():
+    global _mag_baseline_ema
+    cmd = ["termux-sensor", "-s", "magnetic", "-d", "200"]
+    while True:
+        try:
+            proc = subprocess.Popen(cmd, stdout=subprocess.PIPE,
+                                    stderr=subprocess.DEVNULL, bufsize=1,
+                                    universal_newlines=True)
+            buf = ""; depth = 0; started = False
+            for ch in iter(lambda: proc.stdout.read(1), ""):
+                if ch == "{":
+                    depth += 1; started = True
+                if started:
+                    buf += ch
+                if ch == "}":
+                    depth -= 1
+                    if depth == 0 and started:
+                        try:
+                            data = json.loads(buf)
+                            vals = None
+                            for _, v in data.items():
+                                if isinstance(v, dict) and v.get("values"):
+                                    vals = v["values"]; break
+                            if vals and len(vals) >= 3:
+                                mag = _math.sqrt(sum(float(x) ** 2 for x in vals[:3]))
+                                # slow EMA baseline so a sustained field becomes "normal"
+                                if _mag_baseline_ema is None:
+                                    _mag_baseline_ema = mag
+                                else:
+                                    _mag_baseline_ema = 0.02 * mag + 0.98 * _mag_baseline_ema
+                                with _mag_lock:
+                                    _mag_latest["uT"] = round(mag, 1)
+                                    _mag_latest["baseline"] = round(_mag_baseline_ema, 1)
+                                    _mag_latest["ts"] = time.time()
+                                    _mag_latest["note"] = ""
+                        except (ValueError, TypeError):
+                            pass
+                        buf = ""; started = False
+        except FileNotFoundError:
+            with _mag_lock:
+                _mag_latest["note"] = "termux-sensor not found"
+            return
+        except Exception as e:
+            with _mag_lock:
+                _mag_latest["note"] = "stream error: " + str(e)
+        time.sleep(1)
+
+def start_mag_stream():
+    threading.Thread(target=_mag_stream_loop, name="mag-stream", daemon=True).start()
+
+
+
+AI_UPSTREAM = "http://127.0.0.1:8081/completion"
+
+OPSAT_SYSTEM = (
+    "You are OPSAT, a terse tactical field computer worn on the wrist. "
+    "You speak in short, clipped, mission-log sentences. You never invent "
+    "capabilities you do not have. When given sensor readings, you interpret "
+    "them plainly and flag only real anomalies. Stay in character; be useful, "
+    "not chatty."
+)
+
+def _ai_complete(user_text, context_text):
+    # build a single prompt string (llama.cpp /completion is prompt-in/text-out)
+    prompt = "<|system|>\n" + OPSAT_SYSTEM + "\n"
+    if context_text:
+        prompt += "<|context|>\n" + context_text + "\n"
+    prompt += "<|user|>\n" + user_text + "\n<|assistant|>\n"
+    payload = json.dumps({
+        "prompt": prompt,
+        "n_predict": 200,
+        "temperature": 0.7,
+        "stop": ["<|user|>", "<|system|>"]
+    }).encode("utf-8")
+    req = _urlreq.Request(AI_UPSTREAM, data=payload,
+                          headers={"Content-Type": "application/json"})
+    try:
+        with _urlreq.urlopen(req, timeout=120) as r:
+            data = json.loads(r.read().decode("utf-8"))
+        return {"ok": True, "text": (data.get("content") or "").strip()}
+    except _urlerr.URLError as e:
+        return {"ok": False, "error": "AI offline (start ~/opsat-ai/start-ai.sh): " + str(e.reason)}
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+
+def _live_sensor_context():
+    """Gather current sensor readings to feed the model, in plain text."""
+    parts = []
+    try:
+        with _light_lock:
+            if _light_latest.get("lux") is not None:
+                parts.append("light %.0f lux" % _light_latest["lux"])
+    except Exception:
+        pass
+    try:
+        with _mag_lock:
+            if _mag_latest.get("uT") is not None:
+                parts.append("EMI %.0f uT (baseline %.0f)" % (
+                    _mag_latest["uT"], _mag_latest.get("baseline") or _mag_latest["uT"]))
+    except Exception:
+        pass
+    return "; ".join(parts)
+
+
 class OpsatHandler(RangeRequestHandler):
 
     def _json(self, obj, code=200):
@@ -295,6 +409,13 @@ class OpsatHandler(RangeRequestHandler):
             self._json(snap)
             return
 
+
+        if self.path == '/emi/live':
+            with _mag_lock:
+                snap = dict(_mag_latest)
+            self._json(snap)
+            return
+
         super().do_GET()
 
     def do_POST(self):
@@ -319,6 +440,20 @@ class OpsatHandler(RangeRequestHandler):
             self._json(nfc_write(payload.get('text', '')))
             return
 
+        if self.path == '/ai':
+            length = int(self.headers.get('Content-Length', 0))
+            raw = self.rfile.read(length) if length else b''
+            try:
+                body = json.loads(raw.decode('utf-8'))
+            except Exception:
+                body = {}
+            user_text = (body.get('text') or '').strip()
+            ctx = _live_sensor_context() if body.get('use_sensors') else ''
+            if not user_text and ctx:
+                user_text = 'Give a one-line read on the room from these sensors.'
+            self._json(_ai_complete(user_text, ctx))
+            return
+
         self.send_response(404)
         self.end_headers()
 
@@ -328,5 +463,6 @@ if __name__ == '__main__':
     if _HAS_DW:
         dungeon_weather.start()
     start_light_stream()
-    print('OPSAT server on port %d (static + range + drop + battery/vibrate/scan/nfc/sense/light)' % PORT)
+    start_mag_stream()
+    print('OPSAT server on port %d (static + range + drop + battery/vibrate/scan/nfc/sense/light/emi)' % PORT)
     ThreadingHTTPServer(('', PORT), OpsatHandler).serve_forever()
