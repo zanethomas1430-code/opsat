@@ -327,6 +327,19 @@ function syncMarkers() {
 function refreshPopups() { wpMarkers.forEach(function (mk) { mk.setPopupContent(popupHtml(mk._obj)); }); }
 
 
+
+// project a point: from (lat,lon) go `dist` meters along compass `brng` degrees
+function _destPoint(lat, lon, brng, dist) {
+  var R = 6371000;
+  var d = dist / R;
+  var b = brng * Math.PI / 180;
+  var lat1 = lat * Math.PI / 180, lon1 = lon * Math.PI / 180;
+  var lat2 = Math.asin(Math.sin(lat1) * Math.cos(d) + Math.cos(lat1) * Math.sin(d) * Math.cos(b));
+  var lon2 = lon1 + Math.atan2(Math.sin(b) * Math.sin(d) * Math.cos(lat1),
+                               Math.cos(d) - Math.sin(lat1) * Math.sin(lat2));
+  return [lat2 * 180 / Math.PI, lon2 * 180 / Math.PI];
+}
+
 function loadCameras() {
   fetch('/cameras', { cache: 'no-store' }).then(function (r) { return r.json(); })
     .then(function (d) {
@@ -339,8 +352,25 @@ function loadCameras() {
           fillOpacity: 0.85, weight: 1
         }).addTo(map);
         mk.bindPopup('ALPR CAMERA<br>' + (c.mfr || 'unknown mfr') +
-                     (c.dir ? '<br>facing ' + c.dir : ''));
+                     (c.dir ? '<br>facing ' + c.dir + '\u00b0' : '<br>direction unknown'));
         camMarkers.push(mk);
+        // cone of vision: if a direction is known, draw the field of view it
+        // watches. ALPRs are fairly narrow; ~50deg spread, ~60m throw.
+        if (c.dir !== '' && c.dir != null && !isNaN(parseFloat(c.dir))) {
+          var dir = parseFloat(c.dir);
+          var spread = 25;      // half-angle degrees
+          var reach = 60;       // meters
+          var pts = [[c.lat, c.lon]];
+          for (var a = -spread; a <= spread; a += 5) {
+            pts.push(_destPoint(c.lat, c.lon, dir + a, reach));
+          }
+          pts.push([c.lat, c.lon]);
+          var cone = L.polygon(pts, {
+            color: '#ff3366', weight: 1, opacity: 0.5,
+            fillColor: '#ff3366', fillOpacity: 0.15
+          }).addTo(map);
+          camMarkers.push(cone);
+        }
       });
       var log = (typeof logEvent === 'function');
       if (log) logEvent('WATCH', camPoints.length + ' ALPR cams loaded', 'system');
