@@ -156,77 +156,103 @@ def nfc_write(text):
 
 
 
-# ---- combined sensor stream: ONE termux-sensor process, both dials ----
-# Android typically allows only one termux-sensor at a time, so we read
-# light AND magnetic in a single stream and fan the values out.
+# ---- on-demand single-sensor stream ----------------------------------
+# Android gives us ONE termux-sensor at a time reliably, so we run exactly
+# one, switchable between 'light' and 'magnetic'. The UI selects which via
+# /sensor/select?s=light|emi ; whichever is active streams live, the other
+# is idle. This avoids the two-sensors-collide hang entirely.
 import math as _math
+_sensor_lock = threading.Lock()
+_active_sensor = {"which": None}          # 'light' | 'magnetic' | None
+_sensor_proc = {"p": None}
 _light_lock = threading.Lock()
-_light_latest = {"lux": None, "ts": None, "note": "starting"}
+_light_latest = {"lux": None, "ts": None, "note": "idle"}
 _mag_lock = threading.Lock()
-_mag_latest = {"uT": None, "baseline": None, "ts": None, "note": "starting"}
+_mag_latest = {"uT": None, "baseline": None, "ts": None, "note": "idle"}
 _mag_baseline_ema = None
 
-def _sensor_stream_loop():
-    global _mag_baseline_ema
-    cmd = ["termux-sensor", "-s", "light,magnetic", "-d", "200"]
-    while True:
+def _kill_sensor():
+    p = _sensor_proc.get("p")
+    if p and p.poll() is None:
         try:
-            proc = subprocess.Popen(cmd, stdout=subprocess.PIPE,
-                                    stderr=subprocess.DEVNULL, bufsize=1,
-                                    universal_newlines=True)
-            buf = ""; depth = 0; started = False
-            for ch in iter(lambda: proc.stdout.read(1), ""):
-                if ch == "{":
-                    depth += 1; started = True
-                if started:
-                    buf += ch
-                if ch == "}":
-                    depth -= 1
-                    if depth == 0 and started:
-                        try:
-                            data = json.loads(buf)
-                            # light: any key containing 'light'
-                            # magnetic: any key containing 'magnet'
-                            for name, v in data.items():
-                                if not isinstance(v, dict):
-                                    continue
-                                vals = v.get("values")
-                                if not vals:
-                                    continue
-                                lname = name.lower()
-                                if "light" in lname:
-                                    with _light_lock:
-                                        _light_latest["lux"] = round(float(vals[0]), 1)
-                                        _light_latest["ts"] = time.time()
-                                        _light_latest["note"] = ""
-                                elif "magnet" in lname and len(vals) >= 3:
-                                    mag = _math.sqrt(sum(float(x) ** 2 for x in vals[:3]))
-                                    if _mag_baseline_ema is None:
-                                        _mag_baseline_ema = mag
-                                    else:
-                                        _mag_baseline_ema = 0.02 * mag + 0.98 * _mag_baseline_ema
-                                    with _mag_lock:
-                                        _mag_latest["uT"] = round(mag, 1)
-                                        _mag_latest["baseline"] = round(_mag_baseline_ema, 1)
-                                        _mag_latest["ts"] = time.time()
-                                        _mag_latest["note"] = ""
-                        except (ValueError, TypeError):
-                            pass
-                        buf = ""; started = False
-        except FileNotFoundError:
-            with _light_lock:
-                _light_latest["note"] = "termux-sensor not found"
-            with _mag_lock:
-                _mag_latest["note"] = "termux-sensor not found"
+            p.terminate()
+            p.wait(timeout=3)
+        except Exception:
+            try: p.kill()
+            except Exception: pass
+    _sensor_proc["p"] = None
+
+def _sensor_worker(which):
+    global _mag_baseline_ema
+    sensor_name = "light" if which == "light" else "magnetic"
+    cmd = ["termux-sensor", "-s", sensor_name, "-d", "200"]
+    try:
+        proc = subprocess.Popen(cmd, stdout=subprocess.PIPE,
+                                stderr=subprocess.DEVNULL, bufsize=1,
+                                universal_newlines=True)
+        _sensor_proc["p"] = proc
+        buf = ""; depth = 0; started = False
+        for ch in iter(lambda: proc.stdout.read(1), ""):
+            if _active_sensor["which"] != which:
+                break                      # we've been switched off
+            if ch == "{":
+                depth += 1; started = True
+            if started:
+                buf += ch
+            if ch == "}":
+                depth -= 1
+                if depth == 0 and started:
+                    try:
+                        data = json.loads(buf)
+                        for name, v in data.items():
+                            if not isinstance(v, dict) or not v.get("values"):
+                                continue
+                            vals = v["values"]
+                            if which == "light":
+                                with _light_lock:
+                                    _light_latest["lux"] = round(float(vals[0]), 1)
+                                    _light_latest["ts"] = time.time()
+                                    _light_latest["note"] = ""
+                            elif which == "magnetic" and len(vals) >= 3:
+                                mag = _math.sqrt(sum(float(x) ** 2 for x in vals[:3]))
+                                if _mag_baseline_ema is None:
+                                    _mag_baseline_ema = mag
+                                else:
+                                    _mag_baseline_ema = 0.02 * mag + 0.98 * _mag_baseline_ema
+                                with _mag_lock:
+                                    _mag_latest["uT"] = round(mag, 1)
+                                    _mag_latest["baseline"] = round(_mag_baseline_ema, 1)
+                                    _mag_latest["ts"] = time.time()
+                                    _mag_latest["note"] = ""
+                    except (ValueError, TypeError):
+                        pass
+                    buf = ""; started = False
+    except FileNotFoundError:
+        with _light_lock: _light_latest["note"] = "termux-sensor not found"
+        with _mag_lock: _mag_latest["note"] = "termux-sensor not found"
+    except Exception as e:
+        with _light_lock: _light_latest["note"] = "stream error: " + str(e)
+
+def select_sensor(which):
+    """Switch the single active sensor. which in {'light','emi',None}."""
+    target = "light" if which == "light" else ("magnetic" if which == "emi" else None)
+    with _sensor_lock:
+        if _active_sensor["which"] == target:
             return
-        except Exception as e:
-            with _light_lock:
-                _light_latest["note"] = "stream error: " + str(e)
-        time.sleep(1)
+        _active_sensor["which"] = target
+        _kill_sensor()
+        # mark the now-idle one
+        if target != "light":
+            with _light_lock: _light_latest["note"] = "idle"
+        if target != "magnetic":
+            with _mag_lock: _mag_latest["note"] = "idle"
+        if target:
+            threading.Thread(target=_sensor_worker, args=(target,),
+                             name="sensor-"+target, daemon=True).start()
 
 def start_sensor_stream():
-    threading.Thread(target=_sensor_stream_loop, name="sensor-stream", daemon=True).start()
-AI_UPSTREAM = "http://127.0.0.1:8081/completion"
+    # nothing auto-starts now; the UI selects a sensor on demand.
+    pass
 
 OPSAT_SYSTEM = (
     "You are OPSAT, a terse tactical field computer worn on the wrist. "
@@ -431,6 +457,17 @@ class OpsatHandler(RangeRequestHandler):
                 self._json({"ok": True, "count": len(pts)})
             except Exception as e:
                 self._json({"ok": False, "error": str(e)})
+            return
+
+
+        if self.path.startswith('/sensor/select'):
+            q = self.path.split('?', 1)[1] if '?' in self.path else ''
+            which = None
+            for kv in q.split('&'):
+                if kv.startswith('s='):
+                    which = kv[2:]
+            select_sensor(which)
+            self._json({"active": _active_sensor["which"]})
             return
 
         super().do_GET()

@@ -119,6 +119,10 @@
               font: inherit; padding: 8px; border-radius: 2px; }
   .ai-btns { display: flex; gap: 6px; margin-top: 6px; }
   .ai-btns button { flex: 1; }
+
+  #sensel { display: flex; gap: 6px; margin-bottom: 8px; }
+  #sensel button { flex: 1; padding: 6px 0; }
+  #sensel button.on { background: var(--accent); color: #000; }
 </style>
 <link rel="stylesheet" href="vendor/leaflet.css">
 <script src="vendor/leaflet.js"></script>
@@ -168,21 +172,18 @@
         </div>
       </div>
       <div id="pane-sense" class="pane">
+        <div id="sensel">
+          <button id="btn-light" onclick="selSensor('light')">LIGHT</button>
+          <button id="btn-emi" onclick="selSensor('emi')">EMI</button>
+          <button id="btn-off" onclick="selSensor('off')">OFF</button>
+        </div>
         <div id="lm-live">
           <div class="lm-row">
-            <span class="lm-cap">LIGHT</span>
-            <span id="lm-val">--</span><span class="lm-unit">lux</span>
-            <span id="lm-lab"></span>
+            <span class="lm-cap" id="sens-cap">SENSOR</span>
+            <span id="sens-val">--</span><span class="lm-unit" id="sens-unit"></span>
+            <span id="sens-lab"></span>
           </div>
           <div id="lm-barwrap"><div id="lm-bar"></div></div>
-        </div>
-        <div id="emi-live">
-          <div class="lm-row">
-            <span class="lm-cap">EMI</span>
-            <span id="emi-val">--</span><span class="lm-unit">µT</span>
-            <span id="emi-lab"></span>
-          </div>
-          <div id="emi-barwrap"><div id="emi-bar"></div></div>
         </div>
         <div id="senseList"><div class="err">Tap SCAN (in panel) to sweep.</div></div>
       </div>
@@ -496,58 +497,46 @@ function nfcWrite() {
 }
 
 
-// ---------- live light meter (SENSE tab) ----------
-var lmTimer = null;
-function lmClassify(lux) {
-  if (lux <= 10) return { t: 'DARK', c: '#3af' };
-  if (lux < 400) return { t: 'DIM', c: '#33ff99' };
-  return { t: 'BRIGHT', c: '#ff5' };
+// ---------- on-demand sensor meter (SENSE tab) ----------
+var sensSel = null;      // 'light' | 'emi' | null
+var sensTimer = null;
+function selSensor(which) {
+  ['light','emi','off'].forEach(function(w){
+    var b=document.getElementById('btn-'+w); if(b) b.classList.toggle('on', w===which);
+  });
+  fetch('/sensor/select?s=' + (which==='off'?'':which), {cache:'no-store'}).catch(function(){});
+  sensSel = (which==='off') ? null : which;
+  var cap=document.getElementById('sens-cap'), unit=document.getElementById('sens-unit');
+  var val=document.getElementById('sens-val'), lab=document.getElementById('sens-lab'), bar=document.getElementById('lm-bar');
+  if (!sensSel) { cap.textContent='SENSOR'; unit.textContent=''; val.textContent='--'; lab.textContent='off'; bar.style.width='0%'; return; }
+  cap.textContent = sensSel==='light' ? 'LIGHT' : 'EMI';
+  unit.textContent = sensSel==='light' ? 'lux' : '\u00b5T';
+  val.textContent='--'; lab.textContent='starting'; bar.style.width='0%';
 }
-function lmPct(lux) {
-  if (lux <= 0) return 0;
-  return Math.max(0, Math.min(100, (Math.log10(lux) + 1) / 5 * 100));
+function sensPoll() {
+  if (!sensSel) return;
+  var url = sensSel==='light' ? '/light/live' : '/emi/live';
+  fetch(url,{cache:'no-store'}).then(function(r){return r.json();}).then(function(d){
+    var val=document.getElementById('sens-val'), lab=document.getElementById('sens-lab'), bar=document.getElementById('lm-bar');
+    if (sensSel==='light') {
+      if (d.lux==null){ val.textContent='--'; lab.textContent=d.note||'...'; return; }
+      var k = d.lux<=10?{t:'DARK',c:'#3af'}:(d.lux<400?{t:'DIM',c:'#33ff99'}:{t:'BRIGHT',c:'#ff5'});
+      val.textContent = d.lux>=1000?(d.lux/1000).toFixed(1)+'k':d.lux; val.style.color=k.c;
+      lab.textContent=k.t; lab.style.color=k.c;
+      bar.style.width = Math.max(0,Math.min(100,(Math.log10(Math.max(d.lux,0.1))+1)/5*100))+'%';
+    } else {
+      if (d.uT==null){ val.textContent='--'; lab.textContent=d.note||'...'; return; }
+      var base=d.baseline||d.uT, dev=d.uT-base;
+      var m = dev>60?{t:'STRONG FIELD',c:'#f33'}:(dev>20?{t:'ELEVATED',c:'#fa0'}:{t:'AMBIENT',c:'#0a7'});
+      val.textContent=d.uT; val.style.color=m.c; lab.textContent=m.t; lab.style.color=m.c;
+      bar.style.width = Math.max(0,Math.min(100,d.uT/200*100))+'%';
+    }
+  }).catch(function(){});
 }
-function lmPoll() {
-  fetch('/light/live', { cache: 'no-store' }).then(function (r) { return r.json(); })
-    .then(function (d) {
-      var val = document.getElementById('lm-val');
-      var lab = document.getElementById('lm-lab');
-      var bar = document.getElementById('lm-bar');
-      if (d.lux == null) { val.textContent = '--'; lab.textContent = d.note || 'no reading'; bar.style.width = '0%'; return; }
-      var k = lmClassify(d.lux);
-      val.textContent = d.lux >= 1000 ? (d.lux/1000).toFixed(1)+'k' : d.lux;
-      val.style.color = k.c; lab.textContent = k.t; lab.style.color = k.c;
-      bar.style.width = lmPct(d.lux) + '%';
-    }).catch(function () {});
-}
-function lmStart() { if (lmTimer) return; lmPoll(); lmTimer = setInterval(lmPoll, 150); }
-function lmStop() { if (lmTimer) { clearInterval(lmTimer); lmTimer = null; } }
-
-
-// ---------- live EMI meter (SENSE tab) ----------
-var emiTimer = null;
-function emiPoll() {
-  fetch('/emi/live', { cache: 'no-store' }).then(function (r) { return r.json(); })
-    .then(function (d) {
-      var val = document.getElementById('emi-val');
-      var lab = document.getElementById('emi-lab');
-      var bar = document.getElementById('emi-bar');
-      if (d.uT == null) { val.textContent = '--'; lab.textContent = d.note || 'no reading'; bar.style.width = '0%'; return; }
-      val.textContent = d.uT;
-      // deviation above baseline is the interesting signal
-      var base = d.baseline || d.uT;
-      var dev = d.uT - base;
-      // bar: map 0..200uT absolute onto width (earth ~50, strong sources >>100)
-      bar.style.width = Math.max(0, Math.min(100, d.uT / 200 * 100)) + '%';
-      var k;
-      if (dev > 60) k = { t: 'STRONG FIELD', c: '#f33' };
-      else if (dev > 20) k = { t: 'ELEVATED', c: '#fa0' };
-      else k = { t: 'AMBIENT', c: '#0a7' };
-      val.style.color = k.c; lab.textContent = k.t; lab.style.color = k.c;
-    }).catch(function () {});
-}
-function emiStart() { if (emiTimer) return; emiPoll(); emiTimer = setInterval(emiPoll, 150); }
-function emiStop() { if (emiTimer) { clearInterval(emiTimer); emiTimer = null; } }
+function lmStart(){ if(sensTimer) return; sensTimer=setInterval(sensPoll,150); }
+function lmStop(){ if(sensTimer){clearInterval(sensTimer); sensTimer=null;} selSensor('off'); }
+function emiStart(){}
+function emiStop(){} }
 
 
 // ---------- AI panel ----------
