@@ -20,6 +20,12 @@ import subprocess
 from http.server import ThreadingHTTPServer
 from RangeHTTPServer import RangeRequestHandler
 
+try:
+    import dungeon_weather
+    _HAS_DW = True
+except Exception:
+    _HAS_DW = False
+
 BASE = os.path.dirname(os.path.abspath(__file__))
 DROP_FILE = os.path.join(BASE, 'drop.txt')
 PORT = 8080
@@ -220,6 +226,14 @@ class OpsatHandler(RangeRequestHandler):
             self._json(nfc_read())
             return
 
+
+        if self.path == '/sense/status':
+            if _HAS_DW:
+                self._json(dungeon_weather.get_state())
+            else:
+                self._json({'error': 'dungeon_weather module not found'})
+            return
+
         super().do_GET()
 
     def do_POST(self):
@@ -250,5 +264,7 @@ class OpsatHandler(RangeRequestHandler):
 
 if __name__ == '__main__':
     os.chdir(BASE)
-    print('OPSAT server on port %d (static + range + drop + battery/vibrate/scan)' % PORT)
+    if _HAS_DW:
+        dungeon_weather.start()
+    print('OPSAT server on port %d (static + range + drop + battery/vibrate/scan/nfc/sense)' % PORT)
     ThreadingHTTPServer(('', PORT), OpsatHandler).serve_forever()

@@ -1,0 +1,159 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>OPSAT — DUNGEON WEATHER</title>
+<style>
+  /* namespaced under #dw- to avoid colliding with your kiosk CSS */
+  #dw-root {
+    font-family: "Courier New", ui-monospace, monospace;
+    color: #cfe;
+    background: #020403;
+    padding: 12px;
+  }
+  #dw-dials { display: flex; gap: 8px; }
+  .dw-dial {
+    flex: 1; border: 1px solid #0a2a1a; border-radius: 3px;
+    background: #030a07; padding: 10px 8px; text-align: center;
+    transition: background .25s, border-color .25s, color .25s;
+  }
+  .dw-dial .dw-name { font-size: 11px; letter-spacing: .18em; color: #4caf7a; }
+  .dw-dial .dw-label { font-size: 20px; margin-top: 6px; text-transform: uppercase; letter-spacing: .05em; }
+  .dw-dial .dw-sub { font-size: 10px; color: #4caf7a; margin-top: 4px; min-height: 12px; }
+
+  /* SOUND colors */
+  .dw-sound-quiet   { background: #041a0f; border-color: #0a5a34; color: #6effa8; }
+  .dw-sound-social  { background: #1a1804; border-color: #6a5a0a; color: #ffe86e; }
+  .dw-sound-hostile { background: #260806; border-color: #a3301f; color: #ff6a4a; }
+
+  /* DEVICES colors */
+  .dw-dev-sparse { background: #041a0f; border-color: #0a5a34; color: #6effa8; }
+  .dw-dev-normal { background: #0a1414; border-color: #244; color: #bcdcd0; }
+  .dw-dev-packed { background: #241404; border-color: #8a5a12; color: #ffb96a; }
+
+  /* LIGHT colors */
+  .dw-light-dark   { background: #04141a; border-color: #0a3a5a; color: #6ec8ff; }
+  .dw-light-dim    { background: #0a1414; border-color: #244; color: #bcdcd0; }
+  .dw-light-bright { background: #201d06; border-color: #8a7a12; color: #fff2a8; }
+
+  #dw-state {
+    margin-top: 12px; text-align: center; padding: 14px 8px;
+    border: 2px solid #244; border-radius: 4px;
+    font-size: 26px; letter-spacing: .2em; font-weight: bold;
+    transition: background .25s, border-color .25s, color .25s;
+  }
+  .dw-state-NORMAL      { background: #041a0f; border-color: #0a5a34; color: #6effa8; }
+  .dw-state-RISING      { background: #241a04; border-color: #8a6a12; color: #ffc85a; }
+  .dw-state-COMPROMISED { background: #260806; border-color: #ff3366; color: #ff6a6a; }
+
+  #dw-extract {
+    margin-top: 8px; text-align: center; font-size: 12px; color: #ff6a6a;
+    letter-spacing: .1em; min-height: 16px;
+  }
+  #dw-log {
+    margin-top: 12px; border-top: 1px solid #0a2a1a; padding-top: 8px;
+    font-size: 11px; color: #4caf7a;
+  }
+  #dw-log div { padding: 2px 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  #dw-updated { font-size: 10px; color: #356; text-align: right; margin-top: 6px; }
+</style>
+</head>
+<body>
+<div id="dw-root">
+
+  <div id="dw-dials">
+    <div class="dw-dial" id="dw-sound">
+      <div class="dw-name">SOUND</div>
+      <div class="dw-label" id="dw-sound-label">—</div>
+      <div class="dw-sub" id="dw-sound-sub"></div>
+    </div>
+    <div class="dw-dial" id="dw-devices">
+      <div class="dw-name">DEVICES</div>
+      <div class="dw-label" id="dw-dev-label">—</div>
+      <div class="dw-sub" id="dw-dev-sub"></div>
+    </div>
+    <div class="dw-dial" id="dw-light">
+      <div class="dw-name">LIGHT</div>
+      <div class="dw-label" id="dw-light-label">—</div>
+      <div class="dw-sub" id="dw-light-sub"></div>
+    </div>
+  </div>
+
+  <div id="dw-state" class="dw-state-NORMAL">NORMAL</div>
+  <div id="dw-extract"></div>
+
+  <div id="dw-log"></div>
+  <div id="dw-updated"></div>
+
+</div>
+
+<script>
+(function () {
+  var DW_POLL_MS = 4000;   // poll cadence (spec: 3-5s)
+
+  function setDial(boxId, labelId, subId, prefix, label, sub) {
+    var box = document.getElementById(boxId);
+    var lbl = document.getElementById(labelId);
+    // clear previous state-* classes on the box, keep .dw-dial
+    box.className = 'dw-dial ' + prefix + label;
+    lbl.textContent = label;
+    document.getElementById(subId).textContent = sub || '';
+  }
+
+  function updateSoundDial(s) {
+    setDial('dw-sound', 'dw-sound-label', 'dw-sound-sub',
+      'dw-sound-', s.label,
+      s.spikes_per_min ? (s.spikes_per_min + '/min spikes') : '');
+  }
+  function updateDevicesDial(d) {
+    var sub = d.count + ' seen';
+    if (d.recent_delta > 0) sub += '  +' + d.recent_delta;
+    setDial('dw-devices', 'dw-dev-label', 'dw-dev-sub', 'dw-dev-', d.label, sub);
+  }
+  function updateLightDial(l) {
+    setDial('dw-light', 'dw-light-label', 'dw-light-sub', 'dw-light-',
+      l.label, (l.raw_level != null ? l.raw_level + ' lux' : ''));
+  }
+  function updateStateChip(state, recommend) {
+    var el = document.getElementById('dw-state');
+    el.className = 'dw-state-' + state;
+    el.textContent = state;
+    document.getElementById('dw-extract').textContent =
+      recommend ? '\u25b2 EXTRACTION RECOMMENDED' : '';
+  }
+  function updateLog(log) {
+    var el = document.getElementById('dw-log');
+    el.innerHTML = '';
+    (log || []).forEach(function (e) {
+      var d = document.createElement('div');
+      var t = (e.t || '').replace('T', ' ').slice(0, 19);
+      d.textContent = t + ' — SOUND:' + e.sound + '  DEV:' + e.devices +
+                      '  STATE:' + e.state;
+      el.appendChild(d);
+    });
+  }
+
+  function poll() {
+    fetch('/sense/status', { cache: 'no-store' })
+      .then(function (r) { return r.json(); })
+      .then(function (data) {
+        updateSoundDial(data.sound);
+        updateDevicesDial(data.devices);
+        updateLightDial(data.light);
+        updateStateChip(data.dungeon_state, data.should_recommend_extraction);
+        updateLog(data.log);
+        document.getElementById('dw-updated').textContent =
+          'updated ' + (data.last_updated || '').replace('T', ' ').slice(0, 19);
+      })
+      .catch(function (e) {
+        document.getElementById('dw-updated').textContent = 'sense offline: ' + e.message;
+      });
+  }
+
+  poll();
+  setInterval(poll, DW_POLL_MS);
+})();
+</script>
+</body>
+</html>
