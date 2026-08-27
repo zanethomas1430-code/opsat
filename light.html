@@ -1,0 +1,95 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>OPSAT — LIGHT</title>
+<style>
+  html, body { margin: 0; height: 100%; background: #000; }
+  #lm-root {
+    height: 100%; display: flex; flex-direction: column;
+    align-items: center; justify-content: center;
+    font-family: "Courier New", ui-monospace, monospace;
+    color: #33ff99; padding: 16px; box-sizing: border-box;
+  }
+  #lm-title { font-size: 13px; letter-spacing: .3em; color: #0a7; margin-bottom: 8px; }
+  #lm-value {
+    font-size: 15vw; font-weight: bold; line-height: 1;
+    transition: color .1s;
+  }
+  #lm-unit { font-size: 5vw; color: #0a7; margin-top: -4px; }
+  #lm-label { font-size: 6vw; letter-spacing: .2em; margin-top: 10px; text-transform: uppercase; }
+  #lm-barwrap {
+    width: 88%; max-width: 640px; height: 26px; margin-top: 20px;
+    border: 1px solid #0a5a34; background: #020a06; border-radius: 3px; overflow: hidden;
+  }
+  #lm-bar {
+    height: 100%; width: 0%;
+    background: linear-gradient(90deg, #063, #0f9 60%, #6f8);
+    transition: width .08s linear;
+  }
+  #lm-scale { width: 88%; max-width: 640px; display: flex; justify-content: space-between;
+              font-size: 10px; color: #063; margin-top: 4px; }
+  #lm-note { font-size: 11px; color: #063; margin-top: 14px; min-height: 14px; text-align: center; }
+</style>
+</head>
+<body>
+<div id="lm-root">
+  <div id="lm-title">OPSAT · LIGHT SENSOR · LIVE</div>
+  <div id="lm-value">—</div>
+  <div id="lm-unit">LUX</div>
+  <div id="lm-label" data-k="label">—</div>
+  <div id="lm-barwrap"><div id="lm-bar"></div></div>
+  <div id="lm-scale"><span>0</span><span>10</span><span>100</span><span>1k</span><span>10k+</span></div>
+  <div id="lm-note"></div>
+</div>
+
+<script>
+(function () {
+  var POLL_MS = 125;                 // 8 readings/sec
+  var valEl = document.getElementById('lm-value');
+  var labEl = document.getElementById('lm-label');
+  var barEl = document.getElementById('lm-bar');
+  var noteEl = document.getElementById('lm-note');
+
+  // lux spans a HUGE range (0.1 dark -> 100000 direct sun), so the bar is
+  // logarithmic: each 10x is another chunk of the bar.
+  function luxToPct(lux) {
+    if (lux <= 0) return 0;
+    var p = (Math.log10(lux) + 1) / 5 * 100;   // maps 0.1..10000 -> 0..100
+    return Math.max(0, Math.min(100, p));
+  }
+  function classify(lux) {
+    if (lux <= 10) return { t: 'DARK',   c: '#3af' };
+    if (lux < 400) return { t: 'DIM',    c: '#33ff99' };
+    return { t: 'BRIGHT', c: '#ff5' };
+  }
+
+  function poll() {
+    fetch('/light/live', { cache: 'no-store' })
+      .then(function (r) { return r.json(); })
+      .then(function (d) {
+        if (d.lux == null) {
+          valEl.textContent = '—';
+          labEl.textContent = 'NO SENSOR';
+          barEl.style.width = '0%';
+          noteEl.textContent = d.note || 'waiting for reading';
+          return;
+        }
+        var lux = d.lux;
+        var k = classify(lux);
+        valEl.textContent = lux >= 1000 ? (lux / 1000).toFixed(1) + 'k' : lux;
+        valEl.style.color = k.c;
+        labEl.textContent = k.t;
+        labEl.style.color = k.c;
+        barEl.style.width = luxToPct(lux) + '%';
+        noteEl.textContent = '';
+      })
+      .catch(function (e) { noteEl.textContent = 'offline: ' + e.message; });
+  }
+  poll();
+  setInterval(poll, POLL_MS);
+})();
+</script>
+</body>
+</html>

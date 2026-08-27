@@ -17,6 +17,8 @@
 import os
 import json
 import subprocess
+import time
+import threading
 from http.server import ThreadingHTTPServer
 from RangeHTTPServer import RangeRequestHandler
 
@@ -150,6 +152,50 @@ def nfc_write(text):
     return {'ok': True, 'wrote': text}
 
 
+
+# ---- live light meter: one persistent sensor stream, newest value shared ----
+_light_lock = threading.Lock()
+_light_latest = {"lux": None, "ts": None, "note": "starting"}
+
+def _light_stream_loop():
+    cmd = ["termux-sensor", "-s", "light", "-d", "200"]  # ~5 readings/sec
+    while True:
+        try:
+            proc = subprocess.Popen(cmd, stdout=subprocess.PIPE,
+                                    stderr=subprocess.DEVNULL, bufsize=1,
+                                    universal_newlines=True)
+            buf = ""
+            for line in proc.stdout:
+                buf += line
+                if line.strip() == "}":
+                    try:
+                        data = json.loads(buf)
+                        lux = None
+                        for _, v in data.items():
+                            vals = v.get("values") if isinstance(v, dict) else None
+                            if vals:
+                                lux = float(vals[0]); break
+                        if lux is not None:
+                            with _light_lock:
+                                _light_latest["lux"] = round(lux, 1)
+                                _light_latest["ts"] = time.time()
+                                _light_latest["note"] = ""
+                    except ValueError:
+                        pass
+                    buf = ""
+        except FileNotFoundError:
+            with _light_lock:
+                _light_latest["note"] = "termux-sensor not found"
+            return
+        except Exception as e:
+            with _light_lock:
+                _light_latest["note"] = "stream error: " + str(e)
+        time.sleep(1)
+
+def start_light_stream():
+    threading.Thread(target=_light_stream_loop, name="light-stream", daemon=True).start()
+
+
 class OpsatHandler(RangeRequestHandler):
 
     def _json(self, obj, code=200):
@@ -234,6 +280,13 @@ class OpsatHandler(RangeRequestHandler):
                 self._json({'error': 'dungeon_weather module not found'})
             return
 
+
+        if self.path == '/light/live':
+            with _light_lock:
+                snap = dict(_light_latest)
+            self._json(snap)
+            return
+
         super().do_GET()
 
     def do_POST(self):
@@ -266,5 +319,6 @@ if __name__ == '__main__':
     os.chdir(BASE)
     if _HAS_DW:
         dungeon_weather.start()
-    print('OPSAT server on port %d (static + range + drop + battery/vibrate/scan/nfc/sense)' % PORT)
+    start_light_stream()
+    print('OPSAT server on port %d (static + range + drop + battery/vibrate/scan/nfc/sense/light)' % PORT)
     ThreadingHTTPServer(('', PORT), OpsatHandler).serve_forever()
