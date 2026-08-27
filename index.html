@@ -513,10 +513,17 @@ function selSensor(which) {
   unit.textContent = sensSel==='light' ? 'lux' : '\u00b5T';
   val.textContent='--'; lab.textContent='starting'; bar.style.width='0%';
 }
+var _sensBusy = false;
 function sensPoll() {
-  if (!sensSel) return;
+  if (!sensSel || _sensBusy) return;
+  _sensBusy = true;
   var url = sensSel==='light' ? '/light/live' : '/emi/live';
-  fetch(url,{cache:'no-store'}).then(function(r){return r.json();}).then(function(d){
+  var ctl = (typeof AbortController!=='undefined') ? new AbortController() : null;
+  var to = setTimeout(function(){ if(ctl) ctl.abort(); }, 2000);
+  fetch(url,{cache:'no-store', signal: ctl?ctl.signal:undefined})
+    .then(function(r){return r.json();})
+    .then(function(d){
+    clearTimeout(to); _sensBusy = false;
     var val=document.getElementById('sens-val'), lab=document.getElementById('sens-lab'), bar=document.getElementById('lm-bar');
     if (sensSel==='light') {
       if (d.lux==null){ val.textContent='--'; lab.textContent=d.note||'...'; return; }
@@ -531,9 +538,9 @@ function sensPoll() {
       val.textContent=d.uT; val.style.color=m.c; lab.textContent=m.t; lab.style.color=m.c;
       bar.style.width = Math.max(0,Math.min(100,d.uT/200*100))+'%';
     }
-  }).catch(function(){});
+  }).catch(function(){ clearTimeout(to); _sensBusy = false; });
 }
-function lmStart(){ if(sensTimer) return; sensTimer=setInterval(sensPoll,150); }
+function lmStart(){ if(sensTimer) return; sensTimer=setInterval(sensPoll,300); }
 function lmStop(){ if(sensTimer){clearInterval(sensTimer); sensTimer=null;} selSensor('off'); }
 function emiStart(){}
 function emiStop(){}
