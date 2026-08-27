@@ -569,10 +569,10 @@ function sensPoll() {
     } else {
       if (d.disturb==null){ val.textContent='--'; lab.textContent=d.note||'...'; return; }
       var dz = d.disturb;
-      var m = dz>3?{t:'DISTURBED',c:'#f33'}:(dz>0.6?{t:'MOVEMENT',c:'#fa0'}:{t:'STILL',c:'#0a7'});
-      val.textContent = dz.toFixed(1); val.style.color=m.c; lab.textContent=m.t; lab.style.color=m.c;
-      bar.style.width = Math.max(0,Math.min(100, dz/6*100))+'%';
-      if (dz>3 && typeof logEvent==='function') logEvent('MOTION','disturbance '+dz.toFixed(1),'alert');
+      var m = dz>1.5?{t:'DISTURBED',c:'#f33'}:(dz>0.15?{t:'MOVEMENT',c:'#fa0'}:{t:'STILL',c:'#0a7'});
+      val.textContent = dz.toFixed(2); val.style.color=m.c; lab.textContent=m.t; lab.style.color=m.c;
+      bar.style.width = Math.max(0,Math.min(100, dz/3*100))+'%';
+      if (dz>1.5 && typeof logEvent==='function') logEvent('MOTION','disturbance '+dz.toFixed(2),'alert');
     }
   }).catch(function(){ clearTimeout(to); _sensBusy = false; });
 }

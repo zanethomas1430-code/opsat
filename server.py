@@ -274,10 +274,10 @@ def _motion_poll_loop():
                     else:
                         # Adapt baseline faster (15%/read ~= converges in a few
                         # seconds) so disturbance falls back to ~0 when still.
-                        _mag_baseline_ema = 0.15 * amag + 0.85 * _mag_baseline_ema
+                        _mag_baseline_ema = 0.08 * amag + 0.92 * _mag_baseline_ema
                     disturb = abs(amag - _mag_baseline_ema)
                     # deadband: ignore sub-0.15 jitter so a still phone reads 0
-                    if disturb < 0.15:
+                    if disturb < 0.05:
                         disturb = 0.0
                     with _mag_lock:
                         _mag_latest["disturb"] = round(disturb, 2)
