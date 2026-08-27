@@ -165,24 +165,32 @@ def _light_stream_loop():
                                     stderr=subprocess.DEVNULL, bufsize=1,
                                     universal_newlines=True)
             buf = ""
-            for line in proc.stdout:
-                buf += line
-                if line.strip() == "}":
-                    try:
-                        data = json.loads(buf)
-                        lux = None
-                        for _, v in data.items():
-                            vals = v.get("values") if isinstance(v, dict) else None
-                            if vals:
-                                lux = float(vals[0]); break
-                        if lux is not None:
-                            with _light_lock:
-                                _light_latest["lux"] = round(lux, 1)
-                                _light_latest["ts"] = time.time()
-                                _light_latest["note"] = ""
-                    except ValueError:
-                        pass
-                    buf = ""
+            depth = 0
+            started = False
+            for ch in iter(lambda: proc.stdout.read(1), ""):
+                if ch == "{":
+                    depth += 1; started = True
+                if started:
+                    buf += ch
+                if ch == "}":
+                    depth -= 1
+                    if depth == 0 and started:
+                        # we have one complete top-level JSON object
+                        try:
+                            data = json.loads(buf)
+                            lux = None
+                            for _, v in data.items():
+                                vals = v.get("values") if isinstance(v, dict) else None
+                                if vals:
+                                    lux = float(vals[0]); break
+                            if lux is not None:
+                                with _light_lock:
+                                    _light_latest["lux"] = round(lux, 1)
+                                    _light_latest["ts"] = time.time()
+                                    _light_latest["note"] = ""
+                        except (ValueError, TypeError):
+                            pass
+                        buf = ""; started = False
         except FileNotFoundError:
             with _light_lock:
                 _light_latest["note"] = "termux-sensor not found"

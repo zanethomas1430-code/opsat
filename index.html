@@ -94,6 +94,15 @@
 
   .leaflet-popup-content-wrapper, .leaflet-popup-tip { background: #000; color: var(--accent); border: 1px solid var(--accent); border-radius: 0; font-family: "Courier New", monospace; }
   .leaflet-popup-content { margin: 8px 10px; font-size: 12px; }
+
+  #lm-live { padding: 6px 4px 10px; border-bottom: 1px solid #0a2a1a; margin-bottom: 8px; }
+  .lm-row { display: flex; align-items: baseline; gap: 6px; }
+  .lm-cap { font-size: 11px; color: var(--accent-soft); letter-spacing: .15em; }
+  #lm-val { font-size: 30px; font-weight: bold; color: var(--accent); min-width: 60px; }
+  .lm-unit { font-size: 12px; color: var(--muted); }
+  #lm-lab { margin-left: auto; font-size: 13px; letter-spacing: .1em; }
+  #lm-barwrap { height: 14px; margin-top: 6px; border: 1px solid #0a2a1a; background: #020a06; border-radius: 2px; overflow: hidden; }
+  #lm-bar { height: 100%; width: 0%; background: linear-gradient(90deg,#063,#0f9 60%,#6f8); transition: width .1s linear; }
 </style>
 <link rel="stylesheet" href="vendor/leaflet.css">
 <script src="vendor/leaflet.js"></script>
@@ -132,6 +141,14 @@
         <div id="intelList"></div>
       </div>
       <div id="pane-sense" class="pane">
+        <div id="lm-live">
+          <div class="lm-row">
+            <span class="lm-cap">LIGHT</span>
+            <span id="lm-val">--</span><span class="lm-unit">lux</span>
+            <span id="lm-lab"></span>
+          </div>
+          <div id="lm-barwrap"><div id="lm-bar"></div></div>
+        </div>
         <div id="senseList"><div class="err">Tap SCAN (in panel) to sweep.</div></div>
       </div>
     </div>
@@ -400,6 +417,34 @@ function nfcWrite() {
     }).catch(function (e) { el.innerHTML = ''; el.appendChild(errLine('WRITE FAILED: ' + e.message)); });
 }
 
+
+// ---------- live light meter (SENSE tab) ----------
+var lmTimer = null;
+function lmClassify(lux) {
+  if (lux <= 10) return { t: 'DARK', c: '#3af' };
+  if (lux < 400) return { t: 'DIM', c: '#33ff99' };
+  return { t: 'BRIGHT', c: '#ff5' };
+}
+function lmPct(lux) {
+  if (lux <= 0) return 0;
+  return Math.max(0, Math.min(100, (Math.log10(lux) + 1) / 5 * 100));
+}
+function lmPoll() {
+  fetch('/light/live', { cache: 'no-store' }).then(function (r) { return r.json(); })
+    .then(function (d) {
+      var val = document.getElementById('lm-val');
+      var lab = document.getElementById('lm-lab');
+      var bar = document.getElementById('lm-bar');
+      if (d.lux == null) { val.textContent = '--'; lab.textContent = d.note || 'no reading'; bar.style.width = '0%'; return; }
+      var k = lmClassify(d.lux);
+      val.textContent = d.lux >= 1000 ? (d.lux/1000).toFixed(1)+'k' : d.lux;
+      val.style.color = k.c; lab.textContent = k.t; lab.style.color = k.c;
+      bar.style.width = lmPct(d.lux) + '%';
+    }).catch(function () {});
+}
+function lmStart() { if (lmTimer) return; lmPoll(); lmTimer = setInterval(lmPoll, 150); }
+function lmStop() { if (lmTimer) { clearInterval(lmTimer); lmTimer = null; } }
+
 // ---------- tabs ----------
 var panes = { obj: 'pane-obj', intel: 'pane-intel', sense: 'pane-sense' };
 document.querySelectorAll('#tabs .tab').forEach(function (tab) {
@@ -412,6 +457,7 @@ document.querySelectorAll('#tabs .tab').forEach(function (tab) {
     document.getElementById('pane-map-hud').classList.remove('on');
     if (v === 'map') { document.getElementById('pane-map-hud').classList.add('on'); initMap(); }
     else { document.getElementById(panes[v]).classList.add('on'); }
+    if (v === 'sense') { lmStart(); } else { lmStop(); }
   };
 });
 
