@@ -102,7 +102,7 @@
   .lm-unit { font-size: 12px; color: var(--muted); }
   #lm-lab { margin-left: auto; font-size: 13px; letter-spacing: .1em; }
   #lm-barwrap { height: 14px; margin-top: 6px; border: 1px solid #0a2a1a; background: #020a06; border-radius: 2px; overflow: hidden; }
-  #lm-bar { height: 100%; width: 0%; background: linear-gradient(90deg,#063,#0f9 60%,#6f8); transition: width .1s linear; }
+  #lm-bar { height: 100%; width: 0%; background: linear-gradient(90deg,#063,#0f9 60%,#6f8); transition: width .12s ease-out; }
 
   #emi-live { padding: 6px 4px 10px; border-bottom: 1px solid #0a2a1a; margin-bottom: 8px; }
   #emi-val { font-size: 30px; font-weight: bold; color: var(--accent); min-width: 60px; }
@@ -174,7 +174,7 @@
       <div id="pane-sense" class="pane">
         <div id="sensel">
           <button id="btn-light" onclick="selSensor('light')">LIGHT</button>
-          <button id="btn-emi" onclick="selSensor('emi')">EMI</button>
+          <button id="btn-emi" onclick="selSensor('emi')">MOTION</button>
           <button id="btn-off" onclick="selSensor('off')">OFF</button>
         </div>
         <div id="lm-live">
@@ -509,8 +509,8 @@ function selSensor(which) {
   var cap=document.getElementById('sens-cap'), unit=document.getElementById('sens-unit');
   var val=document.getElementById('sens-val'), lab=document.getElementById('sens-lab'), bar=document.getElementById('lm-bar');
   if (!sensSel) { cap.textContent='SENSOR'; unit.textContent=''; val.textContent='--'; lab.textContent='off'; bar.style.width='0%'; return; }
-  cap.textContent = sensSel==='light' ? 'LIGHT' : 'EMI';
-  unit.textContent = sensSel==='light' ? 'lux' : '\u00b5T';
+  cap.textContent = sensSel==='light' ? 'LIGHT' : 'MOTION';
+  unit.textContent = sensSel==='light' ? 'lux' : '';
   val.textContent='--'; lab.textContent='starting'; bar.style.width='0%';
 }
 var _sensBusy = false;
@@ -532,15 +532,16 @@ function sensPoll() {
       lab.textContent=k.t; lab.style.color=k.c;
       bar.style.width = Math.max(0,Math.min(100,(Math.log10(Math.max(d.lux,0.1))+1)/5*100))+'%';
     } else {
-      if (d.uT==null){ val.textContent='--'; lab.textContent=d.note||'...'; return; }
-      var base=d.baseline||d.uT, dev=d.uT-base;
-      var m = dev>60?{t:'STRONG FIELD',c:'#f33'}:(dev>20?{t:'ELEVATED',c:'#fa0'}:{t:'AMBIENT',c:'#0a7'});
-      val.textContent=d.uT; val.style.color=m.c; lab.textContent=m.t; lab.style.color=m.c;
-      bar.style.width = Math.max(0,Math.min(100,d.uT/200*100))+'%';
+      if (d.disturb==null){ val.textContent='--'; lab.textContent=d.note||'...'; return; }
+      var dz = d.disturb;
+      var m = dz>3?{t:'DISTURBED',c:'#f33'}:(dz>0.6?{t:'MOVEMENT',c:'#fa0'}:{t:'STILL',c:'#0a7'});
+      val.textContent = dz.toFixed(1); val.style.color=m.c; lab.textContent=m.t; lab.style.color=m.c;
+      bar.style.width = Math.max(0,Math.min(100, dz/6*100))+'%';
+      if (dz>3 && typeof logEvent==='function') logEvent('MOTION','disturbance '+dz.toFixed(1),'alert');
     }
   }).catch(function(){ clearTimeout(to); _sensBusy = false; });
 }
-function lmStart(){ if(sensTimer) return; sensTimer=setInterval(sensPoll,300); }
+function lmStart(){ if(sensTimer) return; sensTimer=setInterval(sensPoll,120); }
 function lmStop(){ if(sensTimer){clearInterval(sensTimer); sensTimer=null;} selSensor('off'); }
 function emiStart(){}
 function emiStop(){}

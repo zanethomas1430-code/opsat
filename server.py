@@ -168,7 +168,7 @@ _sensor_proc = {"p": None}
 _light_lock = threading.Lock()
 _light_latest = {"lux": None, "ts": None, "note": "idle"}
 _mag_lock = threading.Lock()
-_mag_latest = {"uT": None, "baseline": None, "ts": None, "note": "idle"}
+_mag_latest = {"disturb": None, "accel": None, "ts": None, "note": "idle"}
 _mag_baseline_ema = None
 
 def _kill_sensor():
@@ -184,8 +184,8 @@ def _kill_sensor():
 
 def _sensor_worker(which):
     global _mag_baseline_ema
-    sensor_name = "light" if which == "light" else "magnetic"
-    cmd = ["termux-sensor", "-s", sensor_name, "-d", "200"]
+    sensor_name = "light" if which == "light" else "accelerometer"
+    cmd = ["termux-sensor", "-s", sensor_name, "-d", "60"]
     try:
         proc = subprocess.Popen(cmd, stdout=subprocess.PIPE,
                                 stderr=subprocess.DEVNULL, bufsize=1,
@@ -213,15 +213,17 @@ def _sensor_worker(which):
                                     _light_latest["lux"] = round(float(vals[0]), 1)
                                     _light_latest["ts"] = time.time()
                                     _light_latest["note"] = ""
-                            elif which == "magnetic" and len(vals) >= 3:
-                                mag = _math.sqrt(sum(float(x) ** 2 for x in vals[:3]))
+                            elif which == "accelerometer" and len(vals) >= 3:
+                                amag = _math.sqrt(sum(float(x) ** 2 for x in vals[:3]))
+                                # baseline = resting magnitude (~9.8 gravity); fast EMA
                                 if _mag_baseline_ema is None:
-                                    _mag_baseline_ema = mag
+                                    _mag_baseline_ema = amag
                                 else:
-                                    _mag_baseline_ema = 0.02 * mag + 0.98 * _mag_baseline_ema
+                                    _mag_baseline_ema = 0.05 * amag + 0.95 * _mag_baseline_ema
+                                disturb = abs(amag - _mag_baseline_ema)
                                 with _mag_lock:
-                                    _mag_latest["uT"] = round(mag, 1)
-                                    _mag_latest["baseline"] = round(_mag_baseline_ema, 1)
+                                    _mag_latest["disturb"] = round(disturb, 2)
+                                    _mag_latest["accel"] = round(amag, 2)
                                     _mag_latest["ts"] = time.time()
                                     _mag_latest["note"] = ""
                     except (ValueError, TypeError):
@@ -235,7 +237,7 @@ def _sensor_worker(which):
 
 def select_sensor(which):
     """Switch the single active sensor. which in {'light','emi',None}."""
-    target = "light" if which == "light" else ("magnetic" if which == "emi" else None)
+    target = "light" if which == "light" else ("accelerometer" if which == "emi" else None)
     with _sensor_lock:
         if _active_sensor["which"] == target:
             return
@@ -244,7 +246,7 @@ def select_sensor(which):
         # mark the now-idle one
         if target != "light":
             with _light_lock: _light_latest["note"] = "idle"
-        if target != "magnetic":
+        if target != "accelerometer":
             with _mag_lock: _mag_latest["note"] = "idle"
         if target:
             threading.Thread(target=_sensor_worker, args=(target,),
