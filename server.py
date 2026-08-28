@@ -270,10 +270,15 @@ TRIP_THRESHOLD = 0.12      # deviation from locked baseline that counts as motio
 REARM_COOLDOWN = 4.0       # seconds after a trip before it re-arms
 
 def _ntfy(msg, title="OPSAT", priority="high", tags="rotating_light"):
+    # HTTP headers must be ASCII, so strip any non-ASCII from title/tags
+    # (the message BODY can be utf-8; only headers are the problem).
+    def _ascii(s):
+        return "".join(c for c in s if ord(c) < 128) or "OPSAT"
     try:
         req = _urlreq.Request(NTFY_URL, data=msg.encode("utf-8"),
-                              headers={"Title": title, "Priority": priority,
-                                       "Tags": tags})
+                              headers={"Title": _ascii(title),
+                                       "Priority": _ascii(priority),
+                                       "Tags": _ascii(tags)})
         _urlreq.urlopen(req, timeout=8).read()
         return True
     except Exception:
@@ -324,7 +329,7 @@ def _motion_poll_loop():
                         _trip["last_trip_ts"] = time.time()
                         ts = time.strftime("%H:%M:%S")
                         _ntfy("OPSAT MOVED at %s (dev %.2f)" % (ts, dev),
-                              title="\u26a0 OPSAT TRIPPED", priority="urgent",
+                              title="OPSAT TRIPPED", priority="urgent",
                               tags="rotating_light")
                 elif phase == "tripped":
                     # hold tripped through cooldown, then auto re-arm
