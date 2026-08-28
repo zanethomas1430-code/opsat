@@ -75,11 +75,12 @@
   #panel-header { flex: 0 0 auto; padding: 4px 6px; border-bottom: 1px solid #0a2a1a; display: flex; justify-content: space-between; align-items: center; }
   #panel-header-title { font-size: 10px; text-transform: uppercase; letter-spacing: 0.15em; color: var(--accent); }
   #panel-header-mode { font-size: 9px; color: var(--muted); }
-  #actions { flex: 0 0 auto; display: grid; grid-template-columns: repeat(3, 1fr); gap: 4px; padding: 4px; }
-  .action-btn { border-radius: 2px; border: 1px solid var(--accent-soft); background: #02150d; color: var(--accent); text-align: center; padding: 6px 2px 4px; text-transform: uppercase; font-size: 10px; letter-spacing: 0.16em; cursor: pointer; }
+  #actions { flex: 0 0 auto; display: grid; grid-template-columns: 1fr 1fr; gap: 6px; padding: 6px; }
+  .action-btn { border-radius: 3px; border: 1px solid var(--accent-soft); background: #02150d; color: var(--accent); text-align: center; padding: 8px 4px; min-height: 46px; display: flex; flex-direction: column; justify-content: center; text-transform: uppercase; font-size: 12px; letter-spacing: 0.08em; cursor: pointer; touch-action: manipulation; }
   .action-btn:active { background: #04311e; box-shadow: 0 0 6px rgba(0,255,153,0.7); }
-  .action-label { display: block; }
-  .action-sub { display: block; font-size: 8px; color: var(--muted); letter-spacing: 0.08em; }
+  .action-btn:last-child { grid-column: 1 / -1; }
+  .action-label { display: block; font-weight: bold; }
+  .action-sub { display: block; font-size: 9px; color: var(--muted); letter-spacing: 0.04em; margin-top: 2px; }
   #events { flex: 1 1 auto; padding: 4px; display: flex; flex-direction: column; gap: 4px; overflow: hidden; }
   #events-log { flex: 1 1 auto; border-radius: 2px; border: 1px solid #0a2a1a; background: #010504; padding: 4px; overflow-y: auto; font-size: 9px; }
   .log-line { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
