@@ -129,9 +129,12 @@
   #pane-sense.on { display: flex; flex-direction: column; height: 100%; }
   #sense-content { flex: 1; overflow-y: auto; min-height: 0; }
   #dd-log { }
-  #sensel { display: flex; gap: 6px; margin-top: 8px; padding-top: 8px;
-            border-top: 1px solid #0a2a1a; }
-  #sensel button { flex: 1; padding: 12px 0; font-size: 13px; }
+  #sensel { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; margin: 10px 0 8px;
+            padding-top: 8px; border-top: 1px solid #0a2a1a; }
+  #sensel button { padding: 0 4px; min-height: 44px; font-family: "Courier New", monospace;
+            font-size: 12px; letter-spacing: 0.08em; text-transform: uppercase;
+            background: #02150d; color: var(--accent); border: 1px solid var(--accent-soft);
+            border-radius: 3px; cursor: pointer; touch-action: manipulation; }
   #sensel button.on { background: var(--accent); color: #000; }
 </style>
 <link rel="stylesheet" href="vendor/leaflet.css">
@@ -196,12 +199,13 @@
             </div>
             <div id="lm-barwrap"><div id="lm-bar"></div></div>
           </div>
-        </div>
-        <div id="sensel">
-          <button id="btn-light" onclick="selSensor('light')">LIGHT</button>
-          <button id="btn-emi" onclick="selSensor('emi')">MOTION</button>
-          <button id="btn-dd" onclick="selDead()">DEAD-DROP</button>
-          <button id="btn-off" onclick="selSensor('off')">OFF</button>
+          <div id="sensel">
+            <button id="btn-light" onclick="selSensor('light')">LIGHT</button>
+            <button id="btn-emi" onclick="selSensor('emi')">MOTION</button>
+            <button id="btn-dd" onclick="selDead()">DEAD-DROP</button>
+            <button id="btn-off" onclick="selSensor('off')">OFF</button>
+          </div>
+          <div id="senseList"></div>
         </div>
       </div>
     </div>
@@ -215,8 +219,6 @@
         <div class="action-btn" data-action="mark"><span class="action-label">MARK</span><span class="action-sub">log intel</span></div>
         <div class="action-btn" data-action="scan"><span class="action-label">SCAN</span><span class="action-sub">wifi + ble</span></div>
         <div class="action-btn" data-action="recon"><span class="action-label">RECON</span><span class="action-sub">own LAN</span></div>
-        <div class="action-btn" data-action="nfcread"><span class="action-label">TAG</span><span class="action-sub">read own</span></div>
-        <div class="action-btn" data-action="nfcwrite"><span class="action-label">WRITE</span><span class="action-sub">own sticker</span></div>
       </div>
       <div id="events">
         <div id="events-log"></div>
@@ -692,8 +694,6 @@ document.querySelectorAll('.action-btn').forEach(function (b) {
     if (a === 'mark') addIntel();
     else if (a === 'scan') scan();
     else if (a === 'recon') netscan();
-    else if (a === 'nfcread') nfcRead();
-    else if (a === 'nfcwrite') nfcWrite();
   };
 });
 
