@@ -125,8 +125,12 @@
   .ai-btns { display: flex; gap: 6px; margin-top: 6px; }
   .ai-btns button { flex: 1; }
 
-  #sensel { display: flex; gap: 6px; margin-bottom: 8px; }
-  #sensel button { flex: 1; padding: 6px 0; }
+  #pane-sense.on { display: flex; flex-direction: column; height: 100%; }
+  #sense-content { flex: 1; overflow-y: auto; min-height: 0; }
+  #dd-log { }
+  #sensel { display: flex; gap: 6px; margin-top: 8px; padding-top: 8px;
+            border-top: 1px solid #0a2a1a; }
+  #sensel button { flex: 1; padding: 12px 0; font-size: 13px; }
   #sensel button.on { background: var(--accent); color: #000; }
 </style>
 <link rel="stylesheet" href="vendor/leaflet.css">
@@ -177,28 +181,27 @@
         </div>
       </div>
       <div id="pane-sense" class="pane">
+        <div id="sense-content">
+          <div id="dd-panel" style="display:none;">
+            <div class="lm-row"><span class="lm-cap" id="dd-cap">DEAD-DROP</span>
+              <span id="dd-state" style="margin-left:auto;font-weight:bold;letter-spacing:.1em;"></span></div>
+            <div id="dd-log" style="margin-top:8px;font-size:12px;overflow-y:auto;"></div>
+          </div>
+          <div id="lm-live">
+            <div class="lm-row">
+              <span class="lm-cap" id="sens-cap">SENSOR</span>
+              <span id="sens-val">--</span><span class="lm-unit" id="sens-unit"></span>
+              <span id="sens-lab"></span>
+            </div>
+            <div id="lm-barwrap"><div id="lm-bar"></div></div>
+          </div>
+        </div>
         <div id="sensel">
           <button id="btn-light" onclick="selSensor('light')">LIGHT</button>
           <button id="btn-emi" onclick="selSensor('emi')">MOTION</button>
+          <button id="btn-dd" onclick="selDead()">DEAD-DROP</button>
           <button id="btn-off" onclick="selSensor('off')">OFF</button>
         </div>
-        <div id="sensel2" style="display:flex;gap:6px;margin-bottom:8px;">
-          <button id="btn-dd" onclick="selDead()" style="flex:1;">DEAD-DROP WATCH</button>
-        </div>
-        <div id="dd-panel" style="display:none;">
-          <div class="lm-row"><span class="lm-cap" id="dd-cap">DEAD-DROP</span>
-            <span id="dd-state" style="margin-left:auto;font-weight:bold;letter-spacing:.1em;"></span></div>
-          <div id="dd-log" style="margin-top:8px;font-size:12px;max-height:38vh;overflow-y:auto;"></div>
-        </div>
-        <div id="lm-live">
-          <div class="lm-row">
-            <span class="lm-cap" id="sens-cap">SENSOR</span>
-            <span id="sens-val">--</span><span class="lm-unit" id="sens-unit"></span>
-            <span id="sens-lab"></span>
-          </div>
-          <div id="lm-barwrap"><div id="lm-bar"></div></div>
-        </div>
-        <div id="senseList"><div class="err">Tap SCAN (in panel) to sweep.</div></div>
       </div>
     </div>
 
