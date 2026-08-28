@@ -255,9 +255,15 @@ def _extract_values(raw):
             return v["values"], ""
     return None, "no values key"
 
-# ntfy push config: set NTFY_TOPIC to your private topic (any hard-to-guess
-# string). iPhone: install ntfy app, subscribe to the same topic.
-NTFY_TOPIC = "opsat-zane-tripwire-7h2k9"   # <-- change to your own secret topic
+# ntfy push config. Your PRIVATE topic lives in ~/opsat/ntfy_topic.txt (one
+# line, gitignored) so it survives git resets and never lands in the repo.
+# Create it once:  echo "your-secret-topic" > ~/opsat/ntfy_topic.txt
+_topic_file = os.path.join(BASE, "ntfy_topic.txt")
+try:
+    with open(_topic_file) as _tf:
+        NTFY_TOPIC = _tf.read().strip()
+except Exception:
+    NTFY_TOPIC = "opsat-default-change-me"
 NTFY_URL = "https://ntfy.sh/" + NTFY_TOPIC
 
 # Tripwire state, exposed via /emi/live:
@@ -266,7 +272,7 @@ _trip = {"phase": "idle", "arm_left": 0, "locked_baseline": None,
          "disturb": 0.0, "last_trip_ts": 0}
 
 ARM_SECONDS = 3.0
-TRIP_THRESHOLD = 0.12      # deviation from locked baseline that counts as motion
+TRIP_THRESHOLD = 0.05      # any motion past sensor noise floor trips it
 REARM_COOLDOWN = 4.0       # seconds after a trip before it re-arms
 
 def _ntfy(msg, title="OPSAT", priority="high", tags="rotating_light"):
