@@ -182,6 +182,14 @@
           <button id="btn-emi" onclick="selSensor('emi')">MOTION</button>
           <button id="btn-off" onclick="selSensor('off')">OFF</button>
         </div>
+        <div id="sensel2" style="display:flex;gap:6px;margin-bottom:8px;">
+          <button id="btn-dd" onclick="selDead()" style="flex:1;">DEAD-DROP WATCH</button>
+        </div>
+        <div id="dd-panel" style="display:none;">
+          <div class="lm-row"><span class="lm-cap" id="dd-cap">DEAD-DROP</span>
+            <span id="dd-state" style="margin-left:auto;font-weight:bold;letter-spacing:.1em;"></span></div>
+          <div id="dd-log" style="margin-top:8px;font-size:12px;max-height:38vh;overflow-y:auto;"></div>
+        </div>
         <div id="lm-live">
           <div class="lm-row">
             <span class="lm-cap" id="sens-cap">SENSOR</span>
@@ -537,6 +545,10 @@ var TRIP = 0.05;
 var sensSel = null;      // 'light' | 'emi' | null
 var sensTimer = null;
 function selSensor(which) {
+  var dp=document.getElementById('dd-panel'); if(dp)dp.style.display='none';
+  var ll=document.getElementById('lm-live'); if(ll)ll.style.display='';
+  if(ddTimer){clearInterval(ddTimer);ddTimer=null;}
+  var bd=document.getElementById('btn-dd'); if(bd)bd.classList.remove('on');
   ['light','emi','off'].forEach(function(w){
     var b=document.getElementById('btn-'+w); if(b) b.classList.toggle('on', w===which);
   });
@@ -566,7 +578,7 @@ function sensPoll() {
       var k = d.lux<=10?{t:'DARK',c:'#3af'}:(d.lux<400?{t:'DIM',c:'#33ff99'}:{t:'BRIGHT',c:'#ff5'});
       val.textContent = d.lux>=1000?(d.lux/1000).toFixed(1)+'k':d.lux; val.style.color=k.c;
       lab.textContent=k.t; lab.style.color=k.c;
-      bar.style.width = Math.max(0,Math.min(100,(Math.log10(Math.max(d.lux,0.1))+1)/5*100))+'%';
+      bar.style.width = Math.max(0,Math.min(100, Math.sqrt(Math.max(d.lux,0)/1500)*100))+'%';
     } else {
       if (d.disturb==null){ val.textContent='--'; lab.textContent=d.note||'...'; return; }
       var dz = d.disturb;
@@ -594,7 +606,7 @@ function sensPoll() {
   }).catch(function(){ clearTimeout(to); _sensBusy = false; });
 }
 function lmStart(){ if(sensTimer) return; sensTimer=setInterval(sensPoll,120); }
-function lmStop(){ if(sensTimer){clearInterval(sensTimer); sensTimer=null;} selSensor('off'); }
+function lmStop(){ if(sensTimer){clearInterval(sensTimer); sensTimer=null;} if(ddTimer){clearInterval(ddTimer);ddTimer=null;} var dp=document.getElementById('dd-panel'); if(dp)dp.style.display='none'; selSensor('off'); }
 function emiStart(){}
 function emiStop(){}
 
@@ -625,6 +637,32 @@ function aiSend(useSensors) {
   }).catch(function (e) {
     pending.innerHTML = '<div class="who">OPSAT</div>[error: ' + e.message + ']';
   });
+}
+
+
+// ---------- Dead-Drop Detector ----------
+var ddTimer = null;
+function selDead() {
+  ['light','emi','off'].forEach(function(w){var b=document.getElementById('btn-'+w);if(b)b.classList.remove('on');});
+  document.getElementById('btn-dd').classList.add('on');
+  document.getElementById('dd-panel').style.display='block';
+  document.getElementById('lm-live').style.display='none';
+  sensSel=null; if(sensTimer){clearInterval(sensTimer);sensTimer=null;}
+  fetch('/sensor/select?s=deaddrop',{cache:'no-store'}).catch(function(){});
+  if(!ddTimer) ddTimer=setInterval(ddPoll,400);
+  ddPoll();
+}
+function ddPoll(){
+  fetch('/deaddrop/status',{cache:'no-store'}).then(function(r){return r.json();}).then(function(d){
+    var st=document.getElementById('dd-state'), log=document.getElementById('dd-log');
+    var phase=d.phase||'idle';
+    if(phase==='arming'){ st.textContent='ARMING '+Math.ceil(d.arm_left||0); st.style.color='#fa0'; }
+    else if(phase==='armed'){ st.textContent='ARMED - WATCHING'; st.style.color='#0a7'; }
+    else if(phase==='tripped'){ st.textContent='! DISTURBED !'; st.style.color='#f33'; }
+    else { st.textContent=phase; st.style.color='#888'; }
+    var ev=d.events||[];
+    log.innerHTML = ev.length ? ev.map(function(e){return '<div style="padding:4px 0;border-bottom:1px solid #0a2a1a;color:#f88;">'+e+'</div>';}).join('') : '<div style="color:#063;">no disturbances logged</div>';
+  }).catch(function(){});
 }
 
 // ---------- tabs ----------

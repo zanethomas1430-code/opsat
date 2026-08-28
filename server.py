@@ -368,22 +368,121 @@ def start_motion_poll():
 
 def select_sensor(which):
     """Switch the single active sensor. Returns immediately; never blocks."""
-    target = "light" if which == "light" else ("accelerometer" if which == "emi" else None)
+    if which == "deaddrop":
+        target = "deaddrop"
+    elif which == "light":
+        target = "light"
+    elif which == "emi":
+        target = "accelerometer"
+    else:
+        target = None
     with _sensor_lock:
         if _active_sensor["which"] == target:
             return
         _active_sensor["which"] = target      # tiny, fast state swap only
-    # everything below is outside the lock so a request never stalls:
     _kill_sensor()
     if target != "light":
         with _light_lock: _light_latest["note"] = "idle"
-    if target != "accelerometer":
+    if target not in ("accelerometer", "deaddrop"):
         with _mag_lock: _mag_latest["note"] = "idle"
     if target == "light":
         threading.Thread(target=_sensor_worker, args=(target,),
                          name="sensor-"+target, daemon=True).start()
     elif target == "accelerometer":
         start_motion_poll()
+    elif target == "deaddrop":
+        start_deaddrop()
+
+
+# ---- Dead-Drop Detector: proximity + light + motion tamper witness ---------
+_dd = {"phase": "idle", "arm_left": 0, "base_light": None,
+       "events": [], "last_ts": 0}
+DD_ARM = 3.0
+DD_LIGHT_JUMP = 40.0      # lux change (up or down) = container opened/covered
+DD_MOTION = 0.08          # accel deviation = moved
+DD_REARM = 5.0
+
+def _read_one(sensor):
+    try:
+        r = subprocess.run(["termux-sensor", "-s", sensor, "-n", "1"],
+                           capture_output=True, text=True, timeout=6)
+        if r.returncode != 0:
+            return None
+        vals, _ = _extract_values(r.stdout)
+        return vals
+    except Exception:
+        return None
+
+def _deaddrop_loop():
+    _dd["phase"] = "arming"
+    _dd["arm_left"] = DD_ARM
+    _dd["events"] = []
+    arm_start = time.time()
+    light_samples = []
+    accel_base = None
+    prox_near_at_arm = None
+    while _active_sensor["which"] == "deaddrop":
+        try:
+            lv = _read_one("light")
+            av = _read_one("accelerometer")
+            pv = _read_one("proximity")
+            lux = float(lv[0]) if lv else None
+            amag = _math.sqrt(sum(float(x)**2 for x in av[:3])) if av and len(av) >= 3 else None
+            prox = float(pv[0]) if pv else None   # usually 0 (near) or ~5 (far)
+
+            phase = _dd["phase"]
+            if phase == "arming":
+                if lux is not None: light_samples.append(lux)
+                if amag is not None: accel_base = amag if accel_base is None else accel_base
+                left = DD_ARM - (time.time() - arm_start)
+                _dd["arm_left"] = max(0, round(left, 1))
+                if left <= 0:
+                    _dd["base_light"] = sum(light_samples)/len(light_samples) if light_samples else 0
+                    _dd["accel_base"] = accel_base or 9.8
+                    prox_near_at_arm = prox
+                    _dd["phase"] = "armed"
+                    _ntfy("Dead-drop armed - watching light/motion/proximity",
+                          title="OPSAT DEADDROP ARMED", priority="default",
+                          tags="white_check_mark")
+            elif phase == "armed":
+                trips = []
+                if lux is not None and _dd.get("base_light") is not None:
+                    if abs(lux - _dd["base_light"]) > DD_LIGHT_JUMP:
+                        direction = "opened" if lux > _dd["base_light"] else "covered"
+                        trips.append("LIGHT %s (%.0f->%.0f lux)" % (direction, _dd["base_light"], lux))
+                if amag is not None and abs(amag - _dd.get("accel_base", 9.8)) > DD_MOTION:
+                    trips.append("MOTION moved")
+                if prox is not None and prox < 3 and (prox_near_at_arm is None or prox_near_at_arm >= 3):
+                    trips.append("PROXIMITY approached")
+                if trips:
+                    ts = time.strftime("%H:%M:%S")
+                    msg = ts + " - " + "; ".join(trips)
+                    _dd["events"].insert(0, msg)
+                    _dd["events"] = _dd["events"][:10]
+                    _dd["phase"] = "tripped"
+                    _dd["last_ts"] = time.time()
+                    _ntfy("DEAD-DROP DISTURBED\n" + msg,
+                          title="OPSAT DEADDROP", priority="urgent", tags="rotating_light")
+            elif phase == "tripped":
+                if time.time() - _dd["last_ts"] > DD_REARM:
+                    _dd["phase"] = "arming"
+                    _dd["arm_left"] = DD_ARM
+                    arm_start = time.time()
+                    light_samples = []; accel_base = None
+
+            with _mag_lock:
+                _mag_latest["dd_phase"] = _dd["phase"]
+                _mag_latest["dd_arm_left"] = _dd["arm_left"]
+                _mag_latest["dd_events"] = _dd["events"][:5]
+                _mag_latest["note"] = ""
+        except Exception as ex:
+            with _mag_lock:
+                _mag_latest["note"] = "deaddrop: " + str(ex)[:50]
+        time.sleep(0.4)
+
+def start_deaddrop():
+    threading.Thread(target=_deaddrop_loop, name="deaddrop", daemon=True).start()
+
 
 def start_sensor_stream():
     # nothing auto-starts now; the UI selects a sensor on demand.
@@ -603,6 +702,16 @@ class OpsatHandler(RangeRequestHandler):
                     which = kv[2:]
             select_sensor(which)
             self._json({"active": _active_sensor["which"]})
+            return
+
+
+        if self.path == '/deaddrop/status':
+            with _mag_lock:
+                snap = {"phase": _mag_latest.get("dd_phase", "idle"),
+                        "arm_left": _mag_latest.get("dd_arm_left", 0),
+                        "events": _mag_latest.get("dd_events", []),
+                        "note": _mag_latest.get("note", "")}
+            self._json(snap)
             return
 
         super().do_GET()
